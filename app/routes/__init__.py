@@ -10,9 +10,11 @@ def register_blueprints(app):
     
     # Import des blueprints
     from app.routes.upload import upload_bp
+    from app.routes.trello import trello_bp
     
     # Enregistrement des blueprints
     app.register_blueprint(upload_bp, url_prefix='/fileapi')
+    app.register_blueprint(trello_bp)
     
     # Blueprint principal pour les routes générales
     main_bp = Blueprint('main', __name__)
