@@ -1,0 +1,77 @@
+{
+  "name": "Test API - Analyse critique avec nouveau format",
+  "requests": [
+    {
+      "name": "1. Test Health Check",
+      "method": "GET",
+      "url": "http://localhost:5000/api/trello/health",
+      "expected": "Status 200, service healthy"
+    },
+    {
+      "name": "2. Test Card Critique HIGH",
+      "method": "POST", 
+      "url": "http://localhost:5000/api/trello/card/critical_test/analyze",
+      "body": {
+        "name": "BUG CRITIQUE - Système de paiement hors service",
+        "desc": "Tous les paiements échouent depuis 2h. Impact critique sur le business. Revenus bloqués. Clients ne peuvent pas payer leurs commandes.",
+        "due": "2025-07-03T16:00:00Z",
+        "list_name": "URGENT",
+        "board_id": "board_prod",
+        "board_name": "Production",
+        "labels": [
+          {"name": "Critical", "color": "red"},
+          {"name": "Production", "color": "black"},
+          {"name": "Bug", "color": "red"}
+        ],
+        "members": [{"fullName": "Lead Developer"}],
+        "url": "https://trello.com/c/critical_test"
+      },
+      "expected": "is_critical: true, criticality_level: HIGH"
+    },
+    {
+      "name": "3. Test Card NON Critique",
+      "method": "POST",
+      "url": "http://localhost:5000/api/trello/card/non_critical_test/analyze", 
+      "body": {
+        "name": "Mise à jour couleur du bouton",
+        "desc": "Changer la couleur du bouton de connexion de bleu à vert pour correspondre à la charte graphique.",
+        "due": null,
+        "list_name": "Backlog",
+        "board_id": "board_design",
+        "board_name": "Design",
+        "labels": [
+          {"name": "UI", "color": "green"},
+          {"name": "Enhancement", "color": "blue"}
+        ],
+        "members": [{"fullName": "Designer"}],
+        "url": "https://trello.com/c/non_critical_test"
+      },
+      "expected": "is_critical: false, criticality_level: NON"
+    },
+    {
+      "name": "4. Test Card MEDIUM",
+      "method": "POST",
+      "url": "http://localhost:5000/api/trello/card/medium_test/analyze",
+      "body": {
+        "name": "Optimisation base de données",
+        "desc": "Les requêtes de recherche sont lentes. Impact sur l'expérience utilisateur mais pas bloquant.",
+        "due": "2025-07-10T17:00:00Z",
+        "list_name": "En cours", 
+        "board_id": "board_tech",
+        "board_name": "Technique",
+        "labels": [
+          {"name": "Performance", "color": "yellow"},
+          {"name": "Database", "color": "blue"}
+        ],
+        "members": [{"fullName": "DBA"}],
+        "url": "https://trello.com/c/medium_test"
+      },
+      "expected": "is_critical: true, criticality_level: MEDIUM"
+    }
+  ],
+  "notes": [
+    "Les réponses incluent maintenant 'is_critical' (boolean) et 'criticality_level' (HIGH/MEDIUM/LOW/NON)",
+    "Le système se base sur les documents uploadés dans ChromaDB",
+    "L'historique des cards analysées est sauvegardé pour améliorer les futures analyses"
+  ]
+}

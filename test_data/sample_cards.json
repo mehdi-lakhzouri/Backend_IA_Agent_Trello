@@ -1,0 +1,52 @@
+{
+    "board_id": "test_board_123",
+    "board_name": "Projet Test",
+    "cards": [
+        {
+            "id": "card_urgent_001",
+            "name": "Correction bug critique - Utilisateurs ne peuvent pas se connecter",
+            "desc": "Depuis ce matin, les utilisateurs signalent qu'ils ne peuvent plus se connecter à l'application. Erreur 500 côté serveur. Impact critique sur tous les utilisateurs.",
+            "due": "2025-07-04T10:00:00Z",
+            "list_name": "En cours",
+            "labels": [
+                {"name": "Bug", "color": "red"},
+                {"name": "Urgent", "color": "orange"},
+                {"name": "Production", "color": "black"}
+            ],
+            "members": [
+                {"fullName": "Développeur Senior"}
+            ],
+            "url": "https://trello.com/c/card_urgent_001"
+        },
+        {
+            "id": "card_medium_002",
+            "name": "Optimisation des performances de la base de données",
+            "desc": "Les requêtes prennent plus de temps que prévu. Il faudrait optimiser les index et revoir quelques requêtes.",
+            "due": "2025-07-15T17:00:00Z",
+            "list_name": "Backlog",
+            "labels": [
+                {"name": "Performance", "color": "yellow"},
+                {"name": "Database", "color": "blue"}
+            ],
+            "members": [
+                {"fullName": "DBA"}
+            ],
+            "url": "https://trello.com/c/card_medium_002"
+        },
+        {
+            "id": "card_low_003",
+            "name": "Amélioration du design de la page d'accueil",
+            "desc": "Moderniser le design de la page d'accueil pour améliorer l'expérience utilisateur. Pas urgent.",
+            "due": null,
+            "list_name": "Idées",
+            "labels": [
+                {"name": "UI/UX", "color": "green"},
+                {"name": "Enhancement", "color": "lime"}
+            ],
+            "members": [
+                {"fullName": "Designer"}
+            ],
+            "url": "https://trello.com/c/card_low_003"
+        }
+    ]
+}
