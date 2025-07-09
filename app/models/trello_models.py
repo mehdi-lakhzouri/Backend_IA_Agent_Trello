@@ -5,6 +5,7 @@ Modèle de données pour les cards Trello et leur analyse de criticité.
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from app import db
 
 
 @dataclass
@@ -50,3 +51,12 @@ class BoardAnalysisSummary:
     low_criticality: int
     analyzed_at: datetime
     success_rate: float
+
+
+class Config(db.Model):
+    __tablename__ = 'config'
+    id = db.Column(db.Integer, primary_key=True)
+    trello_token = db.Column(db.String(255), nullable=False)
+    board_id = db.Column(db.String(255), nullable=False)
+    board_name = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())

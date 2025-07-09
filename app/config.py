@@ -40,6 +40,11 @@ class Config:
             raise ValueError("GOOGLE_API_KEY doit être définie dans les variables d'environnement")
         return True
 
+    SQLALCHEMY_DATABASE_URI = (
+        f"mysql+pymysql://{os.getenv('MYSQL_USER', 'root')}:{os.getenv('MYSQL_PASSWORD', '')}@{os.getenv('MYSQL_HOST', 'localhost')}/{os.getenv('MYSQL_DB', 'talanagent')}?charset=utf8mb4"
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
 class DevelopmentConfig(Config):
     """Configuration pour l'environnement de développement."""
     DEBUG = True

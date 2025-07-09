@@ -7,6 +7,7 @@ from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+from app.db import db
 
 def create_app():
     """Factory pattern pour créer l'instance Flask."""
@@ -37,6 +38,9 @@ def create_app():
     # Créer les dossiers nécessaires
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['CHROMA_DB_PATH'], exist_ok=True)
+    
+    # Initialiser la base de données
+    db.init_app(app)
     
     # Enregistrement des blueprints
     from app.routes import register_blueprints

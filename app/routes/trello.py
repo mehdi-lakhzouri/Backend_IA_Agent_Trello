@@ -3,7 +3,9 @@ import os
 from datetime import datetime
 from app.services.trello_service import get_trello_user_info
 from app.services.criticality_analyzer import CriticalityAnalyzer
-from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary
+from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary, Config
+from app import db
+from app.utils.crypto_service import crypto_service
 
 
 trello_bp = Blueprint('trello', __name__)
@@ -177,8 +179,8 @@ def trello_health_check():
 @trello_bp.route('/api/trello/config-board-subscription', methods=['POST'])
 def config_board_subscription():
     """
-    Route de test pour capturer les données envoyées par le frontend
-    concernant la configuration d'abonnement aux boards Trello.
+    Capture et enregistre la configuration d'abonnement aux boards Trello.
+    Attend: trello_token, board_id et board_name
     """
     try:
         # Capturer les données envoyées par le frontend
@@ -194,17 +196,163 @@ def config_board_subscription():
                 "message": "Corps de requête JSON requis"
             }), 400
         
-        # Retourner une réponse de test avec les données capturées
+        # Extraire les champs requis
+        trello_token = data.get('trello_token')
+        board_id = data.get('board_id')
+        board_name = data.get('board_name')
+        
+        # Vérification des champs obligatoires
+        if not trello_token or not board_id or not board_name:
+            return jsonify({
+                "status": "error",
+                "message": "trello_token, board_id et board_name sont requis"
+            }), 400
+        
+        # Crypter le token avant l'enregistrement
+        try:
+            encrypted_token = crypto_service.encrypt_token(trello_token)
+        except Exception as crypto_error:
+            return jsonify({
+                "status": "error",
+                "message": f"Erreur lors du cryptage du token: {str(crypto_error)}"
+            }), 500
+        
+        # Vérifier si une configuration existe déjà pour ce board
+        existing_config = Config.query.filter_by(board_id=board_id).first()
+        
+        if existing_config:
+            # Mettre à jour la configuration existante
+            existing_config.trello_token = encrypted_token
+            existing_config.board_name = board_name
+            action = "mise à jour"
+        else:
+            # Créer une nouvelle configuration
+            new_config = Config(
+                trello_token=encrypted_token,
+                board_id=board_id,
+                board_name=board_name
+            )
+            db.session.add(new_config)
+            action = "création"
+        
+        # Sauvegarder en base
+        db.session.commit()
+        
+        # Retourner une réponse de succès
         return jsonify({
             "status": "success",
-            "message": "Configuration d'abonnement reçue avec succès",
-            "received_data": data,
+            "message": f"Configuration d'abonnement {action} avec succès",
+            "data": {
+                "board_id": board_id,
+                "board_name": board_name,
+                "action": action
+            },
             "timestamp": datetime.now().isoformat(),
             "endpoint": "/api/trello/config-board-subscription"
         }), 200
         
     except Exception as e:
+        # Rollback en cas d'erreur
+        db.session.rollback()
         return jsonify({
             "status": "error",
-            "message": f"Erreur lors de la configuration: {str(e)}"
+            "message": f"Erreur lors de l'enregistrement: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/trello/config-board-subscription', methods=['GET'])
+def get_board_subscriptions():
+    """
+    Récupère toutes les configurations d'abonnement aux boards Trello.
+    """
+    try:
+        configs = Config.query.all()
+        
+        config_list = []
+        for config in configs:
+            config_list.append({
+                "id": config.id,
+                "board_id": config.board_id,
+                "board_name": config.board_name,
+                "created_at": config.created_at.isoformat() if config.created_at else None
+            })
+        
+        return jsonify({
+            "status": "success",
+            "total": len(config_list),
+            "configurations": config_list
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la récupération: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/trello/config-board-subscription/<board_id>', methods=['DELETE'])
+def delete_board_subscription(board_id):
+    """
+    Supprime une configuration d'abonnement pour un board spécifique.
+    """
+    try:
+        config = Config.query.filter_by(board_id=board_id).first()
+        
+        if not config:
+            return jsonify({
+                "status": "error",
+                "message": f"Configuration non trouvée pour le board {board_id}"
+            }), 404
+        
+        db.session.delete(config)
+        db.session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Configuration supprimée pour le board {board_id}"
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la suppression: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/trello/config-board-subscription/<board_id>/token', methods=['GET'])
+def get_decrypted_token(board_id):
+    """
+    Récupère le token décrypté pour un board spécifique.
+    ATTENTION: Route sensible - à protéger en production.
+    """
+    try:
+        config = Config.query.filter_by(board_id=board_id).first()
+        
+        if not config:
+            return jsonify({
+                "status": "error",
+                "message": f"Configuration non trouvée pour le board {board_id}"
+            }), 404
+        
+        # Décrypter le token
+        try:
+            decrypted_token = crypto_service.decrypt_token(config.trello_token)
+        except Exception as crypto_error:
+            return jsonify({
+                "status": "error",
+                "message": f"Erreur lors du décryptage: {str(crypto_error)}"
+            }), 500
+        
+        return jsonify({
+            "status": "success",
+            "board_id": board_id,
+            "board_name": config.board_name,
+            "trello_token": decrypted_token
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la récupération: {str(e)}"
         }), 500

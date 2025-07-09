@@ -16,6 +16,9 @@ google-generativeai
 # ChromaDB pour le stockage vectoriel
 chromadb==0.4.18
 
+# Cryptographie pour sécuriser les tokens
+cryptography==41.0.7
+
 # Traitement de fichiers
 PyPDF2==3.0.1
 python-docx==0.8.11
