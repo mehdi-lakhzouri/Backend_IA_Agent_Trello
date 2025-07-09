@@ -1,6 +1,6 @@
 """
 Initialisation de l'application Flask.
-Configure CORS, blueprints et paramètres globaux.
+Configure CORS, blueprints, scheduler et paramètres globaux.
 """
 
 from flask import Flask
@@ -20,6 +20,11 @@ def create_app():
     # Configuration CORS
     CORS(app, resources={
         r"/fileapi/*": {
+            "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+            "methods": ["GET", "POST", "PUT", "DELETE"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        },
+        r"/api/*": {
             "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
             "methods": ["GET", "POST", "PUT", "DELETE"],
             "allow_headers": ["Content-Type", "Authorization"]

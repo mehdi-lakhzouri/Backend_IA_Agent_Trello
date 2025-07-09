@@ -1,23 +1,30 @@
 import chromadb
 import os
 
-# Paramètres par défaut (adapter si besoin)
+# Chemin vers le dossier contenant la base ChromaDB
 DB_PATH = './instance/chromadb'
-COLLECTION_NAME = 'IA_AGENT_TALAN'
 
-def purge_chromadb():
+def purge_all_collections():
     try:
-        # Initialisation du client ChromaDB
+        # Initialiser le client ChromaDB en mode persistant
         client = chromadb.PersistentClient(path=DB_PATH)
-        collection = client.get_collection(name=COLLECTION_NAME)
-        all_ids = collection.get().get('ids', [])
-        if all_ids:
-            collection.delete(ids=all_ids)
-            print(f"{len(all_ids)} documents supprimés de la collection '{COLLECTION_NAME}'.")
-        else:
-            print(f"Aucun document à supprimer dans la collection '{COLLECTION_NAME}'.")
+
+        # Liste toutes les collections existantes
+        collections = client.list_collections()
+
+        if not collections:
+            print("✅ Aucune collection à supprimer.")
+            return
+
+        # Suppression de chaque collection
+        for col in collections:
+            client.delete_collection(name=col.name)
+            print(f"🗑️ Collection '{col.name}' supprimée avec succès.")
+
+        print("✅ Toutes les collections ont été purgées.")
+        
     except Exception as e:
-        print(f"Erreur lors de la purge: {e}")
+        print(f"❌ Erreur lors de la purge : {e}")
 
 if __name__ == "__main__":
-    purge_chromadb()
+    purge_all_collections()
