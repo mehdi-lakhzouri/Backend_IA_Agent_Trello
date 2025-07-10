@@ -6,6 +6,7 @@ from app.services.criticality_analyzer import CriticalityAnalyzer
 from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary, Config
 from app import db
 from app.utils.crypto_service import crypto_service
+from app.services.database_service import DatabaseService
 
 
 trello_bp = Blueprint('trello', __name__)
@@ -179,84 +180,69 @@ def trello_health_check():
 @trello_bp.route('/api/trello/config-board-subscription', methods=['POST'])
 def config_board_subscription():
     """
-    Capture et enregistre la configuration d'abonnement aux boards Trello.
-    Attend: trello_token, board_id et board_name
+    Capture les données Trello et les enregistre en base.
+    Attend: token, board_id, board_name, list_id, list_name
     """
     try:
-        # Capturer les données envoyées par le frontend
         data = request.get_json()
-        
-        # Log des données reçues (pour debug)
         print(f"[DEBUG] Données reçues sur /api/trello/config-board-subscription: {data}")
         
-        # Vérification basique
         if not data:
             return jsonify({
                 "status": "error",
                 "message": "Corps de requête JSON requis"
             }), 400
         
-        # Extraire les champs requis
-        trello_token = data.get('trello_token')
-        board_id = data.get('board_id')
-        board_name = data.get('board_name')
+        # Extraction des champs (accepte camelCase et snake_case)
+        token = data.get('token')
+        board_id = data.get('board_id') or data.get('boardId')
+        board_name = data.get('board_name') or data.get('boardName')
+        list_id = data.get('list_id') or data.get('listId')
+        list_name = data.get('list_name') or data.get('listName')
         
         # Vérification des champs obligatoires
-        if not trello_token or not board_id or not board_name:
+        required_fields = [
+            ('token', token),
+            ('board_id', board_id),
+            ('board_name', board_name),
+            ('list_id', list_id),
+            ('list_name', list_name)
+        ]
+        missing_fields = [name for name, value in required_fields if not value]
+        
+        if missing_fields:
             return jsonify({
                 "status": "error",
-                "message": "trello_token, board_id et board_name sont requis"
+                "message": f"Champs manquants : {', '.join(missing_fields)}"
             }), 400
         
-        # Crypter le token avant l'enregistrement
-        try:
-            encrypted_token = crypto_service.encrypt_token(trello_token)
-        except Exception as crypto_error:
+        # Création automatique de la base et des tables
+        db_service = DatabaseService()
+        if not db_service.ensure_database_and_tables():
             return jsonify({
                 "status": "error",
-                "message": f"Erreur lors du cryptage du token: {str(crypto_error)}"
+                "message": "Erreur lors de la création de la base de données"
             }), 500
         
-        # Vérifier si une configuration existe déjà pour ce board
-        existing_config = Config.query.filter_by(board_id=board_id).first()
+        # Enregistrement en base avec toutes les données dans config_data
+        config = Config()
+        config.config_data = data
         
-        if existing_config:
-            # Mettre à jour la configuration existante
-            existing_config.trello_token = encrypted_token
-            existing_config.board_name = board_name
-            action = "mise à jour"
-        else:
-            # Créer une nouvelle configuration
-            new_config = Config(
-                trello_token=encrypted_token,
-                board_id=board_id,
-                board_name=board_name
-            )
-            db.session.add(new_config)
-            action = "création"
-        
-        # Sauvegarder en base
+        db.session.add(config)
         db.session.commit()
         
-        # Retourner une réponse de succès
         return jsonify({
             "status": "success",
-            "message": f"Configuration d'abonnement {action} avec succès",
-            "data": {
-                "board_id": board_id,
-                "board_name": board_name,
-                "action": action
-            },
-            "timestamp": datetime.now().isoformat(),
-            "endpoint": "/api/trello/config-board-subscription"
+            "message": "Configuration Trello enregistrée avec succès",
+            "data": data,
+            "timestamp": datetime.now().isoformat()
         }), 200
         
     except Exception as e:
-        # Rollback en cas d'erreur
         db.session.rollback()
         return jsonify({
             "status": "error",
-            "message": f"Erreur lors de l'enregistrement: {str(e)}"
+            "message": f"Erreur lors de la configuration: {str(e)}"
         }), 500
 
 
