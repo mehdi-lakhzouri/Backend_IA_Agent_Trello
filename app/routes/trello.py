@@ -223,10 +223,9 @@ def config_board_subscription():
                 "status": "error",
                 "message": "Erreur lors de la création de la base de données"
             }), 500
-        
+
         # Enregistrement en base avec toutes les données dans config_data
-        config = Config()
-        config.config_data = data
+        config = Config(config_data=data)
         
         db.session.add(config)
         db.session.commit()

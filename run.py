@@ -9,6 +9,8 @@ import os
 # Création de l'instance Flask
 app = create_app()
 
+from app.db import db
+
 if __name__ == '__main__':
     # Configuration pour le développement
     port = int(os.environ.get('PORT', 5000))
