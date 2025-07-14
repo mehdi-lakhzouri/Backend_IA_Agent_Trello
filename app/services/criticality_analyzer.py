@@ -128,76 +128,70 @@ class CriticalityAnalyzer:
     
     def _build_criticality_prompt(self, card_data: Dict[str, Any], app_context: str, similar_cards: str) -> str:
         """
-        Construit le prompt pour l'analyse de criticité.
         
-        Args:
-            card_data: Données de la card Trello
-            app_context: Contexte de l'application depuis les documents uploadés
-            similar_cards: Cards similaires précédemment analysées
-            
-        Returns:
-            Prompt formaté pour Gemini
         """
-        return f"""
-Tu es un Product Owner expert avec une approche TRÈS SÉVÈRE dans l'analyse de criticité des tâches.
+        return f'''
+As a Senior Product Owner and certified Risk Analyst with 15+ years of experience in agile product management. Your task is to assess the criticality of the following Trello card with maximum depth and nuance, using all available context from uploaded documents and previous analyses.
 
-CONTEXTE DE L'APPLICATION (Extrait des fichiers uploadés):
+APPLICATION CONTEXT (from uploaded documents):
 {app_context}
 
-HISTORIQUE DES CARDS SIMILAIRES ANALYSÉES:
+SIMILAR CARDS HISTORY (previously analyzed):
 {similar_cards}
 
-CARD À ANALYSER:
-- Titre: {card_data.get('name', 'N/A')}
-- Description: {card_data.get('desc', 'Aucune description')}
+CARD TO ANALYZE:
+- Title: {card_data.get('name', 'N/A')}
+- Description: {card_data.get('desc', 'No description')}
 - Labels: {', '.join([label.get('name', '') for label in card_data.get('labels', [])])}
-- Date d'échéance: {card_data.get('due', 'Aucune')}
-- Liste: {card_data.get('list_name', 'N/A')}
-- Membres: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])])}
+- Due date: {card_data.get('due', 'None')}
+- List: {card_data.get('list_name', 'N/A')}
+- Members: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])])}
 
-ÉTAPE 1 - VÉRIFICATION DE CONTEXTE:
-Si cette card concerne une application différente ou un projet sans rapport avec le contexte fourni, réponds EXACTEMENT: "HORS_CONTEXTE"
+STEP 1 - CONTEXT CHECK:
+If this card is clearly unrelated to the provided application context, reply EXACTLY: "OUT_OF_CONTEXT".
 
-ÉTAPE 2 - ANALYSE DE CRITICITÉ (APPROCHE TRÈS SÉVÈRE):
-Une tâche est considérée comme CRITIQUE uniquement si elle répond à UN ou PLUSIEURS de ces critères STRICTS:
+STEP 2 - DEEP CRITICALITY ANALYSIS:
+Carefully read and understand the application context and the card. Consider all business, technical, and user impacts, even if the context is only partially relevant. Use your best judgment to infer missing details.
 
-🔴 CRITÈRES CRITIQUES ABSOLUS:
-- L'application ou une fonctionnalité PRINCIPALE devient inutilisable
-- Perte ou corruption de données importantes
-- Faille de sécurité ou exposition de données sensibles
-- Impact financier direct et immédiat (perte de revenus)
-- Non-respect de réglementations critiques
-- Application en panne ou inaccessible en production
+A task is considered CRITICAL if it meets ONE OR MORE of these STRICT criteria:
+- The application or a MAIN feature becomes unusable
+- Loss or corruption of important data
+- Security breach or exposure of sensitive data
+- Direct and immediate financial impact (loss of revenue)
+- Violation of critical regulations
+- Application is down or inaccessible in production
 
-❌ NE SONT GÉNÉRALEMENT PAS CRITIQUES (sauf exception majeure):
-- Améliorations esthétiques (design, couleurs, logos)
-- Optimisations de performance mineures
-- Documentation et guides utilisateur
-- Nouvelles fonctionnalités (même importantes)
-- Corrections de bugs mineurs sans impact majeur
-- Tâches de maintenance préventive
-- Refactoring et nettoyage de code
+Tasks are GENERALLY NOT CRITICAL (unless exceptional):
+- Cosmetic improvements (design, colors, logos)
+- Minor performance optimizations
+- Documentation and user guides
+- New features (even important ones)
+- Minor bug fixes without major impact
+- Preventive maintenance
+- Refactoring and code cleanup
 
-ÉTAPE 3 - NIVEAUX DE CRITICITÉ (uniquement si critique):
-- HIGH: Impact immédiat sur l'utilisation en production
-- MEDIUM: Fonctionnalité importante affectée mais contournement possible
-- LOW: Impact limité mais nécessite correction
+STEP 3 - CRITICALITY LEVELS (if critical):
+- HIGH: Immediate impact on production usage or business continuity
+- MEDIUM: Important functionality affected but workaround possible
+- LOW: Limited impact but correction is still needed
 
-PROCESSUS DE DÉCISION EN 2 ÉTAPES:
-1. Cette tâche empêche-t-elle le bon fonctionnement PRINCIPAL de l'application ? OUI/NON
-2. Si OUI, quel est le niveau d'impact ? HIGH/MEDIUM/LOW
+DECISION PROCESS:
+1. Does this task prevent the MAIN function of the application? YES/NO
+2. If YES, what is the impact level? HIGH/MEDIUM/LOW
 
-IMPORTANT: Sois TRÈS SÉLECTIF. La majorité des tâches (80-90%) ne sont PAS critiques.
+IMPORTANT: Be precise and contextual. Most tasks (80-90%) are NOT critical. However, if you see any plausible risk, do not hesitate to assign a level and explain why.
 
-FORMAT DE RÉPONSE OBLIGATOIRE:
-- "HORS_CONTEXTE" si hors contexte
-- "NON" si pas critique (cas le plus fréquent)
-- "OUI HIGH" si critique impact majeur
-- "OUI MEDIUM" si critique impact modéré
-- "OUI LOW" si critique impact limité
+RESPONSE FORMAT (MANDATORY):
+- "OUT_OF_CONTEXT" if the card is unrelated
+- "NO" if not critical (most common)
+- "YES HIGH" if critical with major impact
+- "YES MEDIUM" if critical with moderate impact
+- "YES LOW" if critical with limited impact
 
-Analyse maintenant cette card:
-"""
+ALWAYS provide a short, precise justification in English for your decision, especially for HIGH/MEDIUM/LOW. Your explanation should reference the document context and card details, even if you have to infer or extrapolate.
+
+Now, analyze this card:
+'''
 
     def analyze_card_criticality(self, card_data: Dict[str, Any]) -> Dict[str, Any]:
         """
