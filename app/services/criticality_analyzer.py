@@ -153,40 +153,25 @@ If this card is clearly unrelated to the provided application context, reply EXA
 STEP 2 - DEEP CRITICALITY ANALYSIS:
 Carefully read and understand the application context and the card. Consider all business, technical, and user impacts, even if the context is only partially relevant. Use your best judgment to infer missing details.
 
-A task is considered CRITICAL if it meets ONE OR MORE of these STRICT criteria:
-- The application or a MAIN feature becomes unusable
-- Loss or corruption of important data
-- Security breach or exposure of sensitive data
-- Direct and immediate financial impact (loss of revenue)
-- Violation of critical regulations
-- Application is down or inaccessible in production
+ALL TASKS ARE CRITICAL - You must assign a criticality level to every task. There are no non-critical tasks.
 
-Tasks are GENERALLY NOT CRITICAL (unless exceptional):
-- Cosmetic improvements (design, colors, logos)
-- Minor performance optimizations
-- Documentation and user guides
-- New features (even important ones)
-- Minor bug fixes without major impact
-- Preventive maintenance
-- Refactoring and code cleanup
-
-STEP 3 - CRITICALITY LEVELS (if critical):
-- HIGH: Immediate impact on production usage or business continuity
-- MEDIUM: Important functionality affected but workaround possible
-- LOW: Limited impact but correction is still needed
+CRITICALITY LEVELS (assign one of these to every task):
+- HIGH: Immediate impact on production usage, business continuity, security issues, data loss, or application downtime
+- MEDIUM: Important functionality affected, significant business impact, or user experience degradation
+- LOW: Minor issues, improvements, documentation, or maintenance tasks
 
 DECISION PROCESS:
-1. Does this task prevent the MAIN function of the application? YES/NO
-2. If YES, what is the impact level? HIGH/MEDIUM/LOW
+1. Analyze the task's impact on users, business, and system stability
+2. Assign the appropriate criticality level (HIGH/MEDIUM/LOW)
+3. Every task must receive a criticality level - no exceptions
 
-IMPORTANT: Be precise and contextual. Most tasks (80-90%) are NOT critical. However, if you see any plausible risk, do not hesitate to assign a level and explain why.
+IMPORTANT: Every single task is critical at some level. Even cosmetic improvements, documentation, or minor fixes have value and should be assigned LOW criticality at minimum.
 
 RESPONSE FORMAT (MANDATORY):
 - "OUT_OF_CONTEXT" if the card is unrelated
-- "NO" if not critical (most common)
-- "YES HIGH" if critical with major impact
-- "YES MEDIUM" if critical with moderate impact
-- "YES LOW" if critical with limited impact
+- "HIGH" if critical with major impact
+- "MEDIUM" if critical with moderate impact  
+- "LOW" if critical with limited impact (minimum level for any task)
 
 ALWAYS provide a short, precise justification in English for your decision, especially for HIGH/MEDIUM/LOW. Your explanation should reference the document context and card details, even if you have to infer or extrapolate.
 
@@ -212,9 +197,9 @@ Now, analyze this card:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
-                    'is_critical': False,
-                    'criticality_level': 'NO_CONTEXT',
-                    'raw_response': "Veuillez uploader un document de description",
+                    'is_critical': True,
+                    'criticality_level': 'LOW',
+                    'raw_response': "Criticité assignée par défaut (LOW) - Veuillez uploader un document de description pour une analyse plus précise",
                     'analyzed_at': None,
                     'success': True
                 }
@@ -230,50 +215,31 @@ Now, analyze this card:
             response_text = response.text.strip().upper()
             
             # Vérifier d'abord si la card est hors contexte
-            if 'HORS_CONTEXTE' in response_text or 'HORS CONTEXTE' in response_text:
+            if 'OUT_OF_CONTEXT' in response_text:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
                     'is_critical': False,
-                    'criticality_level': 'HORS_CONTEXTE',
+                    'criticality_level': 'OUT_OF_CONTEXT',
                     'raw_response': "Désolé, je peux vous répondre que selon le contexte de votre document uploadé.",
                     'analyzed_at': None,
                     'success': True
                 }
             
-            # Parser la réponse OUI/NON + niveau
-            is_critical = False
-            criticality_level = 'NON'
+            # Parser la réponse - tous les tickets sont critiques avec un niveau
+            is_critical = True  # Tous les tickets sont critiques
+            criticality_level = 'LOW'  # Niveau par défaut
             
-            if response_text.startswith('OUI'):
-                is_critical = True
-                if 'HIGH' in response_text:
-                    criticality_level = 'HIGH'
-                elif 'MEDIUM' in response_text:
-                    criticality_level = 'MEDIUM'
-                elif 'LOW' in response_text:
-                    criticality_level = 'LOW'
-                else:
-                    # Si OUI mais pas de niveau spécifié, par défaut MEDIUM
-                    criticality_level = 'MEDIUM'
-            elif response_text == 'NON':
-                is_critical = False
-                criticality_level = 'NON'
+            if 'HIGH' in response_text:
+                criticality_level = 'HIGH'
+            elif 'MEDIUM' in response_text:
+                criticality_level = 'MEDIUM'
+            elif 'LOW' in response_text:
+                criticality_level = 'LOW'
             else:
-                # Fallback pour réponses inattendues
-                current_app.logger.warning(f"Réponse inattendue de Gemini: {response_text}")
-                # Essayer de parser quand même
-                if any(level in response_text for level in ['HIGH', 'MEDIUM', 'LOW']):
-                    is_critical = True
-                    if 'HIGH' in response_text:
-                        criticality_level = 'HIGH'
-                    elif 'MEDIUM' in response_text:
-                        criticality_level = 'MEDIUM'
-                    else:
-                        criticality_level = 'LOW'
-                else:
-                    is_critical = False
-                    criticality_level = 'NON'
+                # Si aucun niveau n'est détecté, assigner LOW par défaut
+                current_app.logger.warning(f"Niveau de criticité non détecté dans la réponse: {response_text}")
+                criticality_level = 'LOW'
             
             result = {
                 'card_id': card_data.get('id'),
@@ -295,8 +261,8 @@ Now, analyze this card:
             return {
                 'card_id': card_data.get('id'),
                 'card_name': card_data.get('name'),
-                'is_critical': False,
-                'criticality_level': 'NON',  # Valeur par défaut en cas d'erreur
+                'is_critical': True,
+                'criticality_level': 'LOW',  # Niveau par défaut en cas d'erreur
                 'error': str(e),
                 'success': False
             }
