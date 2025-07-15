@@ -180,15 +180,15 @@ def process_all_configurations() -> List[Dict[str, Any]]:
         configs = Config.query.all()
         
         if not configs:
-            print("❌ Aucune configuration trouvée dans la base de données.")
+            print(" Aucune configuration trouvée dans la base de données.")
             return results
         
-        print(f"🔍 {len(configs)} configuration(s) trouvée(s).")
+        print(f" {len(configs)} configuration(s) trouvée(s).")
         
         # Créer UNE SEULE session d'analyse pour toutes les configurations
-        print("\n📝 Création d'une session d'analyse globale...")
+        print("\n Création d'une session d'analyse globale...")
         analyse = create_global_analyse_session()
-        print(f"✅ Session d'analyse globale créée: {analyse.reference}")
+        print(f" Session d'analyse globale créée: {analyse.reference}")
         
         # Traiter chaque configuration et créer les analyse_board correspondantes
         valid_configs = []
@@ -206,7 +206,7 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                 
                 # Vérifier que les données essentielles sont présentes
                 if not config_data['token'] or not config_data['board_id']:
-                    print(f"   ⚠️  Configuration incomplète - Token ou Board ID manquant")
+                    print(f"     Configuration incomplète - Token ou Board ID manquant")
                     invalid_configs.append({
                         'config_id': config.id,
                         'status': 'error',
@@ -217,7 +217,7 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                 
                 # Créer l'entrée analyse_board pour ce board
                 analyse_board = create_analyse_board(analyse, config_data)
-                print(f"   ✅ Analyse board créée: ID {analyse_board.id}")
+                print(f"    Analyse board créée: ID {analyse_board.id}")
                 
                 # Analyser les cartes de la liste si list_id est disponible
                 analysis_result = None
@@ -230,16 +230,16 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                         tickets_saved = analysis_result.get('tickets_saved', 0)
                         criticality_dist = analysis_result.get('criticality_distribution', {})
                         
-                        print(f"   ✅ Analyse terminée:")
+                        print(f"    Analyse terminée:")
                         print(f"      • Cartes analysées: {cards_count}")
                         print(f"      • Tickets sauvegardés: {tickets_saved}")
                         print(f"      • Criticité HIGH: {criticality_dist.get('HIGH', 0)}")
                         print(f"      • Criticité MEDIUM: {criticality_dist.get('MEDIUM', 0)}")
                         print(f"      • Criticité LOW: {criticality_dist.get('LOW', 0)}")
                     else:
-                        print(f"   ⚠️  Erreur lors de l'analyse des cartes: {analysis_result.get('error', 'Erreur inconnue')}")
+                        print(f"     Erreur lors de l'analyse des cartes: {analysis_result.get('error', 'Erreur inconnue')}")
                 else:
-                    print(f"   ⚠️  Pas de list_id fourni - analyse des cartes ignorée")
+                    print(f"     Pas de list_id fourni - analyse des cartes ignorée")
                 
                 valid_configs.append({
                     'config_id': config.id,
@@ -253,7 +253,7 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                 created_boards.append(analyse_board)
                 
             except Exception as e:
-                print(f"   ❌ Erreur lors du traitement de la configuration {config.id}: {str(e)}")
+                print(f"    Erreur lors du traitement de la configuration {config.id}: {str(e)}")
                 invalid_configs.append({
                     'config_id': config.id,
                     'status': 'error',
@@ -275,7 +275,7 @@ def process_all_configurations() -> List[Dict[str, Any]]:
             })
     
     except Exception as e:
-        print(f"❌ Erreur générale lors du traitement des configurations: {str(e)}")
+        print(f" Erreur générale lors du traitement des configurations: {str(e)}")
         results.append({
             'status': 'error',
             'message': f'Erreur générale: {str(e)}',
@@ -293,7 +293,7 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
     Affiche un résumé du traitement effectué.
     """
     print("\n" + "="*60)
-    print("📊 RÉSUMÉ DU TRAITEMENT")
+    print(" RÉSUMÉ DU TRAITEMENT")
     print("="*60)
     
     if not results:
@@ -313,13 +313,13 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
         print(f"Configurations invalides: {len(invalid_configs)}")
         
         if invalid_configs:
-            print("\n❌ CONFIGURATIONS INVALIDES:")
+            print("\n CONFIGURATIONS INVALIDES:")
             for config_info in invalid_configs:
                 board_name = config_info['config_data'].get('board_name', 'N/A')
                 print(f"   • Config ID {config_info['config_id']} - {board_name}: {config_info['message']}")
         
         if valid_configs:
-            print("\n✅ CONFIGURATIONS VALIDES:")
+            print("\n CONFIGURATIONS VALIDES:")
             total_cards_analyzed = 0
             total_tickets_saved = 0
             
@@ -342,16 +342,16 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
                 else:
                     print(f"   • Config ID {config_info['config_id']} - Board: {board_name}, List: {list_name}")
                     if config_info['config_data'].get('list_id'):
-                        print(f"     ❌ Erreur lors de l'analyse des cartes")
+                        print(f"      Erreur lors de l'analyse des cartes")
                     else:
-                        print(f"     ⚠️  Pas de list_id - analyse des cartes ignorée")
+                        print(f"       Pas de list_id - analyse des cartes ignorée")
             
             if total_cards_analyzed > 0:
                 print(f"\n📈 TOTAUX:")
                 print(f"   • Total cartes analysées: {total_cards_analyzed}")
                 print(f"   • Total tickets sauvegardés: {total_tickets_saved}")
     else:
-        print(f"❌ Erreur générale: {result['message']}")
+        print(f" Erreur générale: {result['message']}")
     
     print("\n💡 Une seule session d'analyse a été créée pour toutes les configurations.")
 
@@ -360,19 +360,19 @@ def main():
     """
     Fonction principale du script.
     """
-    print("🚀 AGENT D'ANALYSE AUTOMATIQUE")
+    print(" AGENT D'ANALYSE AUTOMATIQUE")
     print("="*50)
     print("Création d'une session d'analyse unique pour toutes les configurations...")
     
     # Vérifier que le serveur Flask est en cours d'exécution pour l'API
-    print("\n🔍 Vérification du serveur Flask...")
+    print("\n Vérification du serveur Flask...")
     if not check_flask_server_running():
-        print("⚠️  Le serveur Flask ne semble pas être en cours d'exécution.")
+        print("  Le serveur Flask ne semble pas être en cours d'exécution.")
         print("   L'analyse des cartes sera ignorée. Pour activer l'analyse complète,")
         print("   démarrez le serveur Flask avec 'python run.py' dans un autre terminal.")
     else:
-        print("✅ Serveur Flask détecté et opérationnel.")
-    
+        print("   Serveur Flask détecté et opérationnel.")
+
     # Créer l'application Flask
     app = create_app()
     
@@ -384,10 +384,10 @@ def main():
             # Afficher le résumé
             print_summary(results)
             
-            print("\n🎉 Traitement terminé avec succès!")
+            print("\n Traitement terminé avec succès!")
             
         except Exception as e:
-            print(f"\n💥 Erreur fatale: {str(e)}")
+            print(f"\n Erreur fatale: {str(e)}")
             sys.exit(1)
 
 
