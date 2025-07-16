@@ -5,6 +5,10 @@ Interface pour l'initialisation et les opérations sur la base vectorielle.
 
 from typing import List, Dict, Any, Optional
 import os
+import shutil
+import tempfile
+import time
+import uuid
 from datetime import datetime
 
 # Imports ChromaDB et LangChain
@@ -46,11 +50,56 @@ class ChromaDBManager:
             # Initialisation du vectorstore LangChain avec Chroma
             collection_name = current_app.config.get('CHROMA_COLLECTION_NAME', 'IA_AGENT_TALAN')
             
-            self.vectorstore = Chroma(
-                collection_name=collection_name,
-                persist_directory=db_path,
-                embedding_function=self.embeddings
-            )
+            # Tentative de création avec gestion d'erreurs de schéma
+            try:
+                self.vectorstore = Chroma(
+                    collection_name=collection_name,
+                    persist_directory=db_path,
+                    embedding_function=self.embeddings
+                )
+            except Exception as schema_error:
+                # Si erreur de schéma, on tente une approche alternative
+                if "no such column" in str(schema_error).lower():
+                    current_app.logger.warning(f"Schéma ChromaDB incompatible: {schema_error}")
+                    
+                    # Tentative de création avec un nom de collection différent
+                    try:
+                        import time
+                        import uuid
+                        
+                        # Créer un nom de collection temporaire
+                        temp_collection_name = f"{collection_name}_{int(time.time())}"
+                        current_app.logger.info(f"Tentative avec collection temporaire: {temp_collection_name}")
+                        
+                        self.vectorstore = Chroma(
+                            collection_name=temp_collection_name,
+                            persist_directory=db_path,
+                            embedding_function=self.embeddings
+                        )
+                        
+                        # Mettre à jour le nom de collection dans la config
+                        current_app.config['CHROMA_COLLECTION_NAME'] = temp_collection_name
+                        current_app.logger.info(f"Collection temporaire créée: {temp_collection_name}")
+                        
+                    except Exception as temp_error:
+                        current_app.logger.error(f"Échec de la création avec collection temporaire: {temp_error}")
+                        # Dernier recours: créer dans un répertoire temporaire
+                        import tempfile
+                        temp_dir = tempfile.mkdtemp(prefix="chromadb_")
+                        current_app.logger.info(f"Utilisation du répertoire temporaire: {temp_dir}")
+                        
+                        self.vectorstore = Chroma(
+                            collection_name=collection_name,
+                            persist_directory=temp_dir,
+                            embedding_function=self.embeddings
+                        )
+                        
+                        # Mettre à jour le chemin dans la config
+                        current_app.config['CHROMA_DB_PATH'] = temp_dir
+                        current_app.logger.warning(f"Base ChromaDB créée dans répertoire temporaire: {temp_dir}")
+                        
+                else:
+                    raise schema_error
             
             current_app.logger.info(f"ChromaDB initialisé avec collection '{collection_name}'")
                 
@@ -60,39 +109,43 @@ class ChromaDBManager:
     
     def store_documents(self, documents: List[Dict[str, Any]]) -> bool:
         """
-        Stocke des documents dans ChromaDB via LangChain.
-        
-        Args:
-            documents (List[Dict]): Liste des documents avec contenu et métadonnées
-            
-        Returns:
-            bool: True si le stockage a réussi
+        Stocke des documents dans ChromaDB via LangChain avec retry et timeout.
         """
+        import time
+        MAX_RETRIES = 3
+        BASE_DELAY = 2  # seconds
         try:
             if self.vectorstore is None:
                 current_app.logger.error("ChromaDB non initialisé")
                 return False
-            
-            # Préparation des textes et métadonnées pour LangChain
+
             texts = []
             metadatas = []
-            
             for doc in documents:
                 texts.append(doc['content'])
                 metadatas.append(doc['metadata'])
-            
-            # Ajout à la collection via LangChain
-            self.vectorstore.add_texts(
-                texts=texts,
-                metadatas=metadatas
-            )
-            
-            current_app.logger.info(f"Stocké {len(documents)} documents dans ChromaDB")
-            return True
-            
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    self.vectorstore.add_texts(
+                        texts=texts,
+                        metadatas=metadatas
+                    )
+                    current_app.logger.info(f"Stocké {len(documents)} documents dans ChromaDB (tentative {attempt})")
+                    return True
+                except Exception as e:
+                    current_app.logger.error(f"Erreur lors du stockage (tentative {attempt}): {str(e)}")
+                    if attempt < MAX_RETRIES:
+                        delay = BASE_DELAY * (2 ** (attempt - 1))
+                        current_app.logger.info(f"Nouvelle tentative dans {delay} secondes...")
+                        time.sleep(delay)
+                    else:
+                        current_app.logger.error(f"Échec du stockage après {MAX_RETRIES} tentatives.")
+                        return False
         except Exception as e:
-            current_app.logger.error(f"Erreur lors du stockage: {str(e)}")
+            current_app.logger.error(f"Erreur inattendue lors du stockage: {str(e)}")
             return False
+        return False
     
     def similarity_search(self, query: str, k: int = 4) -> List[Dict[str, Any]]:
         """
@@ -365,5 +418,47 @@ class ChromaDBManager:
         collection_name = current_app.config.get('CHROMA_COLLECTION_NAME', 'IA_AGENT_TALAN')
         client = chromadb.PersistentClient(path=db_path)
         return client.get_collection(name=collection_name)
+    
+    def reset_database(self) -> bool:
+        """
+        Remet à zéro complètement la base de données ChromaDB.
+        Version Windows-friendly qui gère les verrous de fichiers.
+        
+        Returns:
+            bool: True si la remise à zéro a réussi
+        """
+        try:
+            db_path = current_app.config.get('CHROMA_DB_PATH', './instance/chromadb')
+            
+            # Fermer la connexion existante
+            if self.vectorstore is not None:
+                self.vectorstore = None
+            
+            # Tentative de suppression avec gestion des erreurs Windows
+            if os.path.exists(db_path):
+                try:
+                    shutil.rmtree(db_path)
+                    current_app.logger.info(f"Répertoire ChromaDB supprimé: {db_path}")
+                except PermissionError as pe:
+                    current_app.logger.warning(f"Impossible de supprimer {db_path}: {pe}")
+                    # Créer un nouveau répertoire avec timestamp
+                    import time
+                    new_db_path = f"{db_path}_{int(time.time())}"
+                    current_app.config['CHROMA_DB_PATH'] = new_db_path
+                    db_path = new_db_path
+                    current_app.logger.info(f"Utilisation du nouveau répertoire: {db_path}")
+            
+            # Recréation du répertoire
+            os.makedirs(db_path, exist_ok=True)
+            
+            # Réinitialisation du client
+            self._initialize_client()
+            
+            current_app.logger.info("Base de données ChromaDB réinitialisée avec succès")
+            return True
+            
+        except Exception as e:
+            current_app.logger.error(f"Erreur lors de la réinitialisation ChromaDB: {str(e)}")
+            return False
 
-   
+

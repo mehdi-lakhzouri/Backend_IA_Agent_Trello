@@ -6,15 +6,15 @@ Flask-CORS==4.0.0
 python-dotenv==1.0.0
 
 # LangChain pour la vectorisation
-langchain
+langchain==0.1.14
 langchain-community==0.0.38
-langchain-google-genai
+langchain-google-genai==0.0.6
 
 # Google Generative AI pour l'analyse de criticité
 google-generativeai
 
 # ChromaDB pour le stockage vectoriel
-chromadb==0.4.18
+chromadb==0.4.24
 
 # Cryptographie pour sécuriser les tokens
 cryptography==41.0.7

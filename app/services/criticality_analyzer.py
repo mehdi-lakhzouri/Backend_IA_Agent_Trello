@@ -197,9 +197,8 @@ Now, analyze this card:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
-                    'is_critical': True,
                     'criticality_level': 'LOW',
-                    'raw_response': "Criticité assignée par défaut (LOW) - Veuillez uploader un document de description pour une analyse plus précise",
+                    'justification': "Criticité assignée par défaut (LOW) - Veuillez uploader un document de description pour une analyse plus précise",
                     'analyzed_at': None,
                     'success': True
                 }
@@ -219,15 +218,13 @@ Now, analyze this card:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
-                    'is_critical': False,
                     'criticality_level': 'OUT_OF_CONTEXT',
-                    'raw_response': "Désolé, je peux vous répondre que selon le contexte de votre document uploadé.",
+                    'justification': "Désolé, je peux vous répondre que selon le contexte de votre document uploadé.",
                     'analyzed_at': None,
                     'success': True
                 }
             
             # Parser la réponse - tous les tickets sont critiques avec un niveau
-            is_critical = True  # Tous les tickets sont critiques
             criticality_level = 'LOW'  # Niveau par défaut
             
             if 'HIGH' in response_text:
@@ -244,9 +241,8 @@ Now, analyze this card:
             result = {
                 'card_id': card_data.get('id'),
                 'card_name': card_data.get('name'),
-                'is_critical': is_critical,
                 'criticality_level': criticality_level,
-                'raw_response': response_text,
+                'justification': response_text,
                 'analyzed_at': None,  # Sera ajouté par la route
                 'success': True
             }
@@ -261,7 +257,6 @@ Now, analyze this card:
             return {
                 'card_id': card_data.get('id'),
                 'card_name': card_data.get('name'),
-                'is_critical': True,
                 'criticality_level': 'LOW',  # Niveau par défaut en cas d'erreur
                 'error': str(e),
                 'success': False
@@ -278,7 +273,6 @@ CARD ANALYSÉE: {card_data.get('name', 'N/A')}
 DESCRIPTION: {card_data.get('desc', 'Aucune')}
 LABELS: {', '.join([label.get('name', '') for label in card_data.get('labels', [])])}
 RÉSULTAT: {analysis_result['criticality_level']}
-CRITIQUE: {'OUI' if analysis_result['is_critical'] else 'NON'}
 BOARD: {card_data.get('board_name', 'N/A')}
             """.strip()
             
@@ -287,8 +281,7 @@ BOARD: {card_data.get('board_name', 'N/A')}
                 'type': 'card_analysis',
                 'card_id': card_data.get('id'),
                 'board_id': card_data.get('board_id'),
-                'criticality_level': analysis_result['criticality_level'],
-                'is_critical': analysis_result['is_critical']
+                'criticality_level': analysis_result['criticality_level']
             }
             
             # Sauvegarder dans ChromaDB

@@ -38,9 +38,8 @@ Ce module fournit des APIs pour analyser la criticité des cards Trello en utili
 {
   "card_id": "507f191e810c19729de860ea",
   "card_name": "Correction bug critique login", 
-  "is_critical": true,
   "criticality_level": "HIGH",
-  "raw_response": "OUI HIGH",
+  "justification": "OUI HIGH",
   "analyzed_at": "2025-07-03T15:30:00Z",
   "success": true
 }

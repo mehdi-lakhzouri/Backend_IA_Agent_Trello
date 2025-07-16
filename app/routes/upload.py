@@ -56,7 +56,11 @@ def upload_document():
             }), 409  # 409 Conflict
         
         # Vectorisation et stockage
-        document_id = vectorizer.vectorize_and_store(content, filename)
+        try:
+            document_id = vectorizer.vectorize_and_store(content, filename)
+        except Exception as e:
+            current_app.logger.error(f"Erreur lors de la vectorisation/embedding: {str(e)}")
+            return jsonify({"error": "Embedding service unavailable, please try again later."}), 503
         
         # Nettoyage du fichier temporaire (optionnel)
         # os.remove(filepath)

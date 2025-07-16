@@ -161,14 +161,13 @@ def analyze_list_cards(board_id, list_id):
         # Calculer les statistiques
         total_cards = len(analysis_results)
         successful_analyses = [r for r in analysis_results if r.get('success', False)]
-        critical_cards = [r for r in successful_analyses if r.get('is_critical', False)]
         
         criticality_counts = {
-            'CRITICAL_TOTAL': len(critical_cards),
-            'NON_CRITICAL': len([r for r in successful_analyses if not r.get('is_critical', True)]),
-            'HIGH': len([r for r in critical_cards if r.get('criticality_level') == 'HIGH']),
-            'MEDIUM': len([r for r in critical_cards if r.get('criticality_level') == 'MEDIUM']),
-            'LOW': len([r for r in critical_cards if r.get('criticality_level') == 'LOW'])
+            'CRITICAL_TOTAL': len(successful_analyses),  # Tous les tickets analysés sont critiques
+            'NON_CRITICAL': 0,  # Plus de tickets non-critiques
+            'HIGH': len([r for r in successful_analyses if r.get('criticality_level') == 'HIGH']),
+            'MEDIUM': len([r for r in successful_analyses if r.get('criticality_level') == 'MEDIUM']),
+            'LOW': len([r for r in successful_analyses if r.get('criticality_level') == 'LOW'])
         }
         
         success_rate = len(successful_analyses) / total_cards if total_cards > 0 else 0
@@ -256,14 +255,13 @@ def analyze_cards_criticality():
         # Calculer les statistiques du board
         total_cards = len(analysis_results)
         successful_analyses = [r for r in analysis_results if r.get('success', False)]
-        critical_cards = [r for r in successful_analyses if r.get('is_critical', False)]
         
         criticality_counts = {
-            'CRITICAL_TOTAL': len(critical_cards),
-            'NON_CRITICAL': len([r for r in successful_analyses if not r.get('is_critical', True)]),
-            'HIGH': len([r for r in critical_cards if r['criticality_level'] == 'HIGH']),
-            'MEDIUM': len([r for r in critical_cards if r['criticality_level'] == 'MEDIUM']),
-            'LOW': len([r for r in critical_cards if r['criticality_level'] == 'LOW'])
+            'CRITICAL_TOTAL': len(successful_analyses),  # Tous les tickets analysés sont critiques
+            'NON_CRITICAL': 0,  # Plus de tickets non-critiques
+            'HIGH': len([r for r in successful_analyses if r['criticality_level'] == 'HIGH']),
+            'MEDIUM': len([r for r in successful_analyses if r['criticality_level'] == 'MEDIUM']),
+            'LOW': len([r for r in successful_analyses if r['criticality_level'] == 'LOW'])
         }
         
         success_rate = len(successful_analyses) / total_cards if total_cards > 0 else 0
@@ -468,4 +466,79 @@ def get_decrypted_token(board_id):
         return jsonify({
             "status": "error",
             "message": f"Erreur lors de la récupération: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/analyses', methods=['GET'])
+def get_analyses():
+    """
+    Récupère la liste de toutes les analyses présentes dans la table analyse.
+    
+    Query Parameters:
+    - limit (int, optional): Nombre maximum d'analyses à retourner (défaut: 50)
+    - offset (int, optional): Décalage pour la pagination (défaut: 0)
+    
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                
+                "reference": "string",
+                "createdAt": "datetime",
+                "tickets_count": integer
+            },
+            ...
+        ],
+        "total": integer,
+        "count": integer,
+        "limit": integer,
+        "offset": integer
+    }
+    """
+    try:
+        # Récupération des paramètres de query
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Validation des paramètres
+        if limit < 1 or limit > 100:
+            limit = 50
+        if offset < 0:
+            offset = 0
+        
+        # Requête pour récupérer les analyses avec pagination
+        analyses_query = Analyse.query.order_by(Analyse.createdAt.desc())
+        total_count = analyses_query.count()
+        
+        analyses = analyses_query.offset(offset).limit(limit).all()
+        
+        # Conversion en dictionnaire avec le nombre de tickets
+        analyses_data = []
+        for analyse in analyses:
+            analyse_dict = analyse.to_dict()
+            
+            # Calculer le nombre total de tickets pour cette analyse
+            tickets_count = 0
+            for board in analyse.boards:
+                tickets_count += len(board.tickets)
+            
+            analyse_dict['tickets_count'] = tickets_count
+            analyses_data.append(analyse_dict)
+        
+        response = {
+            "status": "success",
+            "data": analyses_data,
+            "total": total_count,
+            "count": len(analyses_data),
+            "limit": limit,
+            "offset": offset
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la récupération des analyses: {str(e)}"
         }), 500
