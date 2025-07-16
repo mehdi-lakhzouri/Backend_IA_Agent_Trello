@@ -7,6 +7,7 @@ from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnaly
 from app import db
 from app.utils.crypto_service import crypto_service
 from app.services.database_service import DatabaseService
+from sqlalchemy import func
 import requests
 
 
@@ -467,8 +468,7 @@ def get_decrypted_token(board_id):
             "status": "error",
             "message": f"Erreur lors de la récupération: {str(e)}"
         }), 500
-
-
+'''
 @trello_bp.route('/api/analyses', methods=['GET'])
 def get_analyses():
     """
@@ -541,4 +541,153 @@ def get_analyses():
         return jsonify({
             "status": "error",
             "message": f"Erreur lors de la récupération des analyses: {str(e)}"
+        }), 500'''
+
+@trello_bp.route('/api/analyses', methods=['GET'])
+def get_analyses():
+    """
+    API avec pagination, filtres et tri pour les analyses.
+    
+    Paramètres :
+    - page (int) : Page actuelle (défaut: 1)
+    - perPage (int) : Éléments par page (5|10|15, défaut: 10)
+    - filters[] (list) : Filtres sous forme ["champ:opérateur:valeur"]
+      Ex: ["createdAt:gte:2023-01-01", "tickets_count:gt:5"]
+    - orderBy (str) : Champ de tri (createdAt, tickets_count, défaut: createdAt)
+    - orderDirection (str) : asc ou desc (défaut: desc)
+    """
+    try:
+        # 1. Récupération des paramètres
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('perPage', 5, type=int)
+        filters = request.args.getlist('filters[]')
+        order_by = request.args.get('orderBy', 'createdAt', type=str)
+        order_direction = request.args.get('orderDirection', 'desc', type=str)
+
+        # 2. Validation des paramètres
+        per_page = per_page if per_page in {5, 10, 15} else 10
+        order_by = order_by if order_by in {'createdAt', 'tickets_count'} else 'createdAt'
+        order_direction = order_direction if order_direction in {'asc', 'desc'} else 'desc'
+
+        # 3. Construction de la requête de base
+        if order_by == 'tickets_count':
+            # Pour le tri par nombre de tickets, on fait un join avec sous-requête
+            query = db.session.query(
+                Analyse,
+                func.count(Tickets.id_ticket).label('tickets_count')
+            ).outerjoin(AnalyseBoard).outerjoin(Tickets).group_by(Analyse.analyse_id)
+        else:
+            # Pour les autres tris, requête simple
+            query = Analyse.query
+
+        # 4. Application des filtres
+        applied_filters = []
+        for f in filters:
+            try:
+                field, operator, value = f.split(':')
+                
+                if field == 'createdAt':
+                    value = datetime.strptime(value, '%Y-%m-%d').date()
+                    
+                    # Appliquer le filtre selon l'opérateur
+                    if operator == 'gte':
+                        filter_cond = Analyse.createdAt >= value
+                    elif operator == 'lte':
+                        filter_cond = Analyse.createdAt <= value
+                    elif operator == 'eq':
+                        filter_cond = func.date(Analyse.createdAt) == value
+                    elif operator == 'gt':
+                        filter_cond = Analyse.createdAt > value
+                    elif operator == 'lt':
+                        filter_cond = Analyse.createdAt < value
+                    else:
+                        continue  # Opérateur non supporté
+                    
+                    query = query.filter(filter_cond)
+                    applied_filters.append({"field": field, "operator": operator, "value": str(value)})
+                    
+                elif field == 'tickets_count':
+                    value = int(value)
+                    
+                    # Pour le filtre par nombre de tickets, on doit utiliser HAVING
+                    if order_by != 'tickets_count':
+                        # Reconstruire la requête avec le count
+                        query = db.session.query(
+                            Analyse,
+                            func.count(Tickets.id_ticket).label('tickets_count')
+                        ).outerjoin(AnalyseBoard).outerjoin(Tickets).group_by(Analyse.analyse_id)
+                    
+                    if operator == 'gt':
+                        query = query.having(func.count(Tickets.id_ticket) > value)
+                    elif operator == 'gte':
+                        query = query.having(func.count(Tickets.id_ticket) >= value)
+                    elif operator == 'lt':
+                        query = query.having(func.count(Tickets.id_ticket) < value)
+                    elif operator == 'lte':
+                        query = query.having(func.count(Tickets.id_ticket) <= value)
+                    elif operator == 'eq':
+                        query = query.having(func.count(Tickets.id_ticket) == value)
+                    else:
+                        continue  # Opérateur non supporté
+                    
+                    applied_filters.append({"field": field, "operator": operator, "value": value})
+                    
+            except Exception as filter_error:
+                continue  # Ignore les filtres mal formatés
+
+        # 5. Gestion du tri
+        if order_by == 'tickets_count':
+            sort_column = func.count(Tickets.id_ticket)
+        else:
+            sort_column = getattr(Analyse, order_by)
+
+        query = query.order_by(
+            sort_column.desc() if order_direction == 'desc' else sort_column.asc()
+        )
+
+        # 6. Pagination
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # 7. Formatage des données
+        analyses_data = []
+        for item in pagination.items:
+            if order_by == 'tickets_count' or any(f['field'] == 'tickets_count' for f in applied_filters):
+                # Si on a fait une requête avec count, item est un tuple (Analyse, count)
+                analysis = item[0] if isinstance(item, tuple) else item
+                tickets_count = item[1] if isinstance(item, tuple) else 0
+            else:
+                # Sinon c'est un objet Analyse simple
+                analysis = item
+                # Calculer le nombre de tickets manuellement
+                tickets_count = sum(len(board.tickets) for board in analysis.boards)
+            
+            analysis_dict = analysis.to_dict()
+            analysis_dict['tickets_count'] = tickets_count
+            analyses_data.append(analysis_dict)
+
+        # 8. Réponse structurée
+        return jsonify({
+            "status": "success",
+            "data": analyses_data,
+            "meta": {
+                "pagination": {
+                    "currentPage": pagination.page,
+                    "perPage": pagination.per_page,
+                    "totalPages": pagination.pages,
+                    "totalItems": pagination.total,
+                    "hasNext": pagination.has_next,
+                    "hasPrev": pagination.has_prev
+                },
+                "filters": applied_filters,
+                "sort": {
+                    "orderBy": order_by,
+                    "orderDirection": order_direction
+                }
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur serveur: {str(e)}"
         }), 500
