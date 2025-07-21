@@ -9,6 +9,7 @@ from app.utils.crypto_service import crypto_service
 from app.services.database_service import DatabaseService
 from sqlalchemy import func
 import requests
+import traceback
 
 
 trello_bp = Blueprint('trello', __name__)
@@ -468,86 +469,13 @@ def get_decrypted_token(board_id):
             "status": "error",
             "message": f"Erreur lors de la récupération: {str(e)}"
         }), 500
-'''
-@trello_bp.route('/api/analyses', methods=['GET'])
-def get_analyses():
-    """
-    Récupère la liste de toutes les analyses présentes dans la table analyse.
-    
-    Query Parameters:
-    - limit (int, optional): Nombre maximum d'analyses à retourner (défaut: 50)
-    - offset (int, optional): Décalage pour la pagination (défaut: 0)
-    
-    Response:
-    {
-        "status": "success",
-        "data": [
-            {
-                
-                "reference": "string",
-                "createdAt": "datetime",
-                "tickets_count": integer
-            },
-            ...
-        ],
-        "total": integer,
-        "count": integer,
-        "limit": integer,
-        "offset": integer
-    }
-    """
-    try:
-        # Récupération des paramètres de query
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-        
-        # Validation des paramètres
-        if limit < 1 or limit > 100:
-            limit = 50
-        if offset < 0:
-            offset = 0
-        
-        # Requête pour récupérer les analyses avec pagination
-        analyses_query = Analyse.query.order_by(Analyse.createdAt.desc())
-        total_count = analyses_query.count()
-        
-        analyses = analyses_query.offset(offset).limit(limit).all()
-        
-        # Conversion en dictionnaire avec le nombre de tickets
-        analyses_data = []
-        for analyse in analyses:
-            analyse_dict = analyse.to_dict()
-            
-            # Calculer le nombre total de tickets pour cette analyse
-            tickets_count = 0
-            for board in analyse.boards:
-                tickets_count += len(board.tickets)
-            
-            analyse_dict['tickets_count'] = tickets_count
-            analyses_data.append(analyse_dict)
-        
-        response = {
-            "status": "success",
-            "data": analyses_data,
-            "total": total_count,
-            "count": len(analyses_data),
-            "limit": limit,
-            "offset": offset
-        }
-        
-        return jsonify(response), 200
-        
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": f"Erreur lors de la récupération des analyses: {str(e)}"
-        }), 500'''
+
 
 @trello_bp.route('/api/analyses', methods=['GET'])
 def get_analyses():
     """
     API avec pagination, filtres et tri pour les analyses.
-    
+
     Paramètres :
     - page (int) : Page actuelle (défaut: 1)
     - perPage (int) : Éléments par page (5|10|15, défaut: 10)
@@ -557,66 +485,52 @@ def get_analyses():
     - orderDirection (str) : asc ou desc (défaut: desc)
     """
     try:
-        # 1. Récupération des paramètres
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('perPage', 5, type=int)
         filters = request.args.getlist('filters[]')
         order_by = request.args.get('orderBy', 'createdAt', type=str)
         order_direction = request.args.get('orderDirection', 'desc', type=str)
 
-        # 2. Validation des paramètres
         per_page = per_page if per_page in {5, 10, 15} else 10
         order_by = order_by if order_by in {'createdAt', 'tickets_count'} else 'createdAt'
         order_direction = order_direction if order_direction in {'asc', 'desc'} else 'desc'
 
-        # 3. Construction de la requête de base
-        if order_by == 'tickets_count':
-            # Pour le tri par nombre de tickets, on fait un join avec sous-requête
-            query = db.session.query(
-                Analyse,
-                func.count(Tickets.id_ticket).label('tickets_count')
-            ).outerjoin(AnalyseBoard).outerjoin(Tickets).group_by(Analyse.analyse_id)
-        else:
-            # Pour les autres tris, requête simple
-            query = Analyse.query
+        # Base query - always join with AnalyseBoard and Tickets to count tickets
+        query = db.session.query(
+            Analyse,
+            func.count(Tickets.id_ticket).label('tickets_count')
+        ).select_from(Analyse) \
+         .outerjoin(AnalyseBoard, AnalyseBoard.analyse_id == Analyse.analyse_id) \
+         .outerjoin(Tickets, Tickets.analyse_board_id == AnalyseBoard.id) \
+         .group_by(Analyse.analyse_id)
 
-        # 4. Application des filtres
         applied_filters = []
+
         for f in filters:
             try:
                 field, operator, value = f.split(':')
-                
+
                 if field == 'createdAt':
                     value = datetime.strptime(value, '%Y-%m-%d').date()
-                    
-                    # Appliquer le filtre selon l'opérateur
+
                     if operator == 'gte':
-                        filter_cond = Analyse.createdAt >= value
+                        query = query.filter(Analyse.createdAt >= value)
                     elif operator == 'lte':
-                        filter_cond = Analyse.createdAt <= value
+                        query = query.filter(Analyse.createdAt <= value)
                     elif operator == 'eq':
-                        filter_cond = func.date(Analyse.createdAt) == value
+                        query = query.filter(func.date(Analyse.createdAt) == value)
                     elif operator == 'gt':
-                        filter_cond = Analyse.createdAt > value
+                        query = query.filter(Analyse.createdAt > value)
                     elif operator == 'lt':
-                        filter_cond = Analyse.createdAt < value
+                        query = query.filter(Analyse.createdAt < value)
                     else:
-                        continue  # Opérateur non supporté
-                    
-                    query = query.filter(filter_cond)
+                        continue
+
                     applied_filters.append({"field": field, "operator": operator, "value": str(value)})
-                    
+
                 elif field == 'tickets_count':
                     value = int(value)
-                    
-                    # Pour le filtre par nombre de tickets, on doit utiliser HAVING
-                    if order_by != 'tickets_count':
-                        # Reconstruire la requête avec le count
-                        query = db.session.query(
-                            Analyse,
-                            func.count(Tickets.id_ticket).label('tickets_count')
-                        ).outerjoin(AnalyseBoard).outerjoin(Tickets).group_by(Analyse.analyse_id)
-                    
+
                     if operator == 'gt':
                         query = query.having(func.count(Tickets.id_ticket) > value)
                     elif operator == 'gte':
@@ -628,14 +542,14 @@ def get_analyses():
                     elif operator == 'eq':
                         query = query.having(func.count(Tickets.id_ticket) == value)
                     else:
-                        continue  # Opérateur non supporté
-                    
-                    applied_filters.append({"field": field, "operator": operator, "value": value})
-                    
-            except Exception as filter_error:
-                continue  # Ignore les filtres mal formatés
+                        continue
 
-        # 5. Gestion du tri
+                    applied_filters.append({"field": field, "operator": operator, "value": value})
+
+            except Exception as filter_error:
+                continue  # Ignore malformed filter
+
+        # Sorting
         if order_by == 'tickets_count':
             sort_column = func.count(Tickets.id_ticket)
         else:
@@ -645,27 +559,21 @@ def get_analyses():
             sort_column.desc() if order_direction == 'desc' else sort_column.asc()
         )
 
-        # 6. Pagination
+        # Pagination
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
-        # 7. Formatage des données
+        # Format results
         analyses_data = []
-        for item in pagination.items:
-            if order_by == 'tickets_count' or any(f['field'] == 'tickets_count' for f in applied_filters):
-                # Si on a fait une requête avec count, item est un tuple (Analyse, count)
-                analysis = item[0] if isinstance(item, tuple) else item
-                tickets_count = item[1] if isinstance(item, tuple) else 0
-            else:
-                # Sinon c'est un objet Analyse simple
-                analysis = item
-                # Calculer le nombre de tickets manuellement
-                tickets_count = sum(len(board.tickets) for board in analysis.boards)
-            
-            analysis_dict = analysis.to_dict()
-            analysis_dict['tickets_count'] = tickets_count
+        for analysis, tickets_count in pagination.items:
+            analysis_dict = {
+                "analyse_id": analysis.analyse_id,
+                "reference": analysis.reference,
+                "createdAt": analysis.createdAt.isoformat() if analysis.createdAt else None,
+                "updatedAt": analysis.updatedAt.isoformat() if analysis.updatedAt else None,
+                "tickets_count": tickets_count
+            }
             analyses_data.append(analysis_dict)
 
-        # 8. Réponse structurée
         return jsonify({
             "status": "success",
             "data": analyses_data,
@@ -687,6 +595,117 @@ def get_analyses():
         }), 200
 
     except Exception as e:
+        print("❌ Une erreur est survenue dans /api/analyses :")
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur serveur: {str(e)}"
+        }), 500
+
+
+
+@trello_bp.route('/api/tickets', methods=['GET'])
+def get_tickets():
+    """
+    Liste paginée des tickets d'une analyse spécifique, avec filtres et tri.
+    """
+    try:
+        analyse_id = request.args.get('analyse_id', type=int)
+        if not analyse_id:
+            return jsonify({"status": "error", "message": "Paramètre analyse_id requis"}), 400
+
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('perPage', 10, type=int)
+        filters = request.args.getlist('filters[]')
+        order_by = request.args.get('orderBy', 'analyzed_at', type=str)
+        order_direction = request.args.get('orderDirection', 'desc', type=str)
+
+        per_page = per_page if per_page in {5, 10, 15} else 10
+        order_by = order_by if order_by in {'criticality_level', 'analyzed_at', 'name'} else 'analyzed_at'
+        order_direction = order_direction if order_direction in {'asc', 'desc'} else 'desc'
+
+        # Récupérer l'analyse_board lié à analyse_id
+        analyse_board = db.session.query(AnalyseBoard).filter_by(analyse_id=analyse_id).first()
+        if not analyse_board:
+            return jsonify({"status": "error", "message": "Aucun analyse_board trouvé pour cette analyse"}), 404
+
+        query = db.session.query(Tickets).filter(Tickets.analyse_board_id == analyse_board.id)
+
+        applied_filters = []
+        for f in filters:
+            try:
+                field, operator, value = f.split(':')
+                if field == 'criticality_level' and operator == 'eq':
+                    query = query.filter(Tickets.criticality_level == value.lower())
+                    applied_filters.append({"field": field, "operator": operator, "value": value})
+                elif field == 'name' and operator == 'contains':
+                    query = query.filter(
+                        func.json_unquote(func.json_extract(Tickets.ticket_metadata, '$.name')).ilike(f'%{value}%')
+                    )
+                    applied_filters.append({"field": field, "operator": operator, "value": value})
+            except Exception:
+                continue
+
+        # Tri dynamique
+        if order_by == 'criticality_level':
+            sort_column = Tickets.criticality_level
+        elif order_by == 'name':
+            sort_column = func.json_unquote(func.json_extract(Tickets.ticket_metadata, '$.name'))
+        elif order_by == 'analyzed_at':
+            sort_column = func.json_unquote(func.json_extract(Tickets.ticket_metadata, '$.analysis_result.analyzed_at'))
+        else:
+            sort_column = Tickets.id_ticket
+
+        query = query.order_by(sort_column.desc() if order_direction == 'desc' else sort_column.asc())
+
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        tickets_data = []
+        for ticket in pagination.items:
+            meta = ticket.ticket_metadata or {}
+            analysis_result = meta.get('analysis_result', {})
+
+            # Nettoyage lisible du champ justification
+            raw_justification = analysis_result.get('justification', '')
+            try:
+                justification = html.unescape(raw_justification).replace('\r', '').strip()
+                justification = re.sub(r'\n{2,}', '\n', justification)
+            except Exception:
+                justification = raw_justification
+
+            tickets_data.append({
+                "name": meta.get('name'),
+                "desc": meta.get('desc'),
+                "due": meta.get('due'),
+                "url": meta.get('url'),
+                "criticality_level": ticket.criticality_level.upper() if ticket.criticality_level else None,
+                "justification": justification,
+                "analyzed_at": analysis_result.get('analyzed_at')
+            })
+
+        return jsonify({
+            "status": "success",
+            "data": tickets_data,
+            "meta": {
+                "pagination": {
+                    "currentPage": pagination.page,
+                    "perPage": pagination.per_page,
+                    "totalPages": pagination.pages,
+                    "totalItems": pagination.total,
+                    "hasNext": pagination.has_next,
+                    "hasPrev": pagination.has_prev
+                },
+                "filters": applied_filters,
+                "sort": {
+                    "orderBy": order_by,
+                    "orderDirection": order_direction
+                }
+            }
+        }), 200
+
+    except Exception as e:
+        print("❌ Une erreur est survenue dans /api/tickets :")
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": f"Erreur serveur: {str(e)}"

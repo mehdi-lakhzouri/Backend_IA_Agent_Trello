@@ -128,55 +128,59 @@ class CriticalityAnalyzer:
     
     def _build_criticality_prompt(self, card_data: Dict[str, Any], app_context: str, similar_cards: str) -> str:
         """
-        
+        Génère un prompt détaillé pour évaluer le niveau de criticité d'une carte Trello,
+        en tenant compte du contexte applicatif, de l'historique des cartes similaires
+        et des impacts potentiels.
         """
         return f'''
-As a Senior Product Owner and certified Risk Analyst with 15+ years of experience in agile product management. Your task is to assess the criticality of the following Trello card with maximum depth and nuance, using all available context from uploaded documents and previous analyses.
+You are a Senior Product Owner and certified Risk Analyst with over 15 years of experience in agile SaaS environments. Your mission is to assess the **criticality** of a Trello card in a **healthcare-grade application**. Your assessment must be based on **business impact, user risk, and technical urgency**, considering all available data.
 
-APPLICATION CONTEXT (from uploaded documents):
+━━━━━━━━━━━━━━━━━━
+ APPLICATION CONTEXT:
 {app_context}
 
-SIMILAR CARDS HISTORY (previously analyzed):
+ SIMILAR CARDS HISTORY:
 {similar_cards}
 
-CARD TO ANALYZE:
-- Title: {card_data.get('name', 'N/A')}
-- Description: {card_data.get('desc', 'No description')}
-- Labels: {', '.join([label.get('name', '') for label in card_data.get('labels', [])])}
-- Due date: {card_data.get('due', 'None')}
-- List: {card_data.get('list_name', 'N/A')}
-- Members: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])])}
+ CARD TO ANALYZE:
+- **Title**: {card_data.get('name', 'N/A')}
+- **Description**: {card_data.get('desc', 'No description')}
+- **Labels**: {', '.join([label.get('name', '') for label in card_data.get('labels', [])]) or 'None'}
+- **Due Date**: {card_data.get('due', 'None')}
+- **List Name**: {card_data.get('list_name', 'N/A')}
+- **Members**: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])]) or 'None'}
 
-STEP 1 - CONTEXT CHECK:
-If this card is clearly unrelated to the provided application context, reply EXACTLY: "OUT_OF_CONTEXT".
+━━━━━━━━━━━━━━━━━━
+ STEP 1: CONTEXTUAL RELEVANCE CHECK  
+If the card is **completely unrelated** to the above application context (no logical or functional connection), respond with **exactly**:
+> OUT_OF_CONTEXT
 
-STEP 2 - DEEP CRITICALITY ANALYSIS:
-Carefully read and understand the application context and the card. Consider all business, technical, and user impacts, even if the context is only partially relevant. Use your best judgment to infer missing details.
+━━━━━━━━━━━━━━━━━━
+ STEP 2: CRITICALITY ASSESSMENT  
+Evaluate how this card impacts the system's operation, user safety, business workflow, or service reliability.  
+Every task must receive a criticality level. **There are no non-critical tasks.**
 
-ALL TASKS ARE CRITICAL - You must assign a criticality level to every task. There are no non-critical tasks.
+CRITICALITY LEVELS:
+-  **HIGH**: Major disruption to production, sensitive data exposure, decision-critical issues, or direct patient/user harm
+-  **MEDIUM**: Significant user or business impact, degraded experience, or operational inefficiencies
+-  **LOW**: Minor improvements, cosmetic changes, documentation, or low-risk refactors
 
-CRITICALITY LEVELS (assign one of these to every task):
-- HIGH: Immediate impact on production usage, business continuity, security issues, data loss, or application downtime
-- MEDIUM: Important functionality affected, significant business impact, or user experience degradation
-- LOW: Minor issues, improvements, documentation, or maintenance tasks
+━━━━━━━━━━━━━━━━━━
+ DECISION LOGIC:
+1. Use the application context and card content to infer scope and risk.
+2. If necessary, extrapolate the real-world impact.
+3. Assign a level: HIGH, MEDIUM, or LOW.
+4. Provide a **clear and direct justification** explaining why this level was chosen.
 
-DECISION PROCESS:
-1. Analyze the task's impact on users, business, and system stability
-2. Assign the appropriate criticality level (HIGH/MEDIUM/LOW)
-3. Every task must receive a criticality level - no exceptions
+━━━━━━━━━━━━━━━━━━
+ FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+Criticality Level: HIGH  
+Justification: [One short paragraph, precise, clear, professional. Mention app context, card content, and impact.]
 
-IMPORTANT: Every single task is critical at some level. Even cosmetic improvements, documentation, or minor fixes have value and should be assigned LOW criticality at minimum.
-
-RESPONSE FORMAT (MANDATORY):
-- "OUT_OF_CONTEXT" if the card is unrelated
-- "HIGH" if critical with major impact
-- "MEDIUM" if critical with moderate impact  
-- "LOW" if critical with limited impact (minimum level for any task)
-
-ALWAYS provide a short, precise justification in English for your decision, especially for HIGH/MEDIUM/LOW. Your explanation should reference the document context and card details, even if you have to infer or extrapolate.
-
-Now, analyze this card:
+━━━━━━━━━━━━━━━━━━
+Now assess this card.
 '''
+
 
     def analyze_card_criticality(self, card_data: Dict[str, Any]) -> Dict[str, Any]:
         """
