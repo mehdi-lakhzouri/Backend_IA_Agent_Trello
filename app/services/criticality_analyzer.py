@@ -128,76 +128,59 @@ class CriticalityAnalyzer:
     
     def _build_criticality_prompt(self, card_data: Dict[str, Any], app_context: str, similar_cards: str) -> str:
         """
-        Construit le prompt pour l'analyse de criticité.
-        
-        Args:
-            card_data: Données de la card Trello
-            app_context: Contexte de l'application depuis les documents uploadés
-            similar_cards: Cards similaires précédemment analysées
-            
-        Returns:
-            Prompt formaté pour Gemini
+        Génère un prompt détaillé pour évaluer le niveau de criticité d'une carte Trello,
+        en tenant compte du contexte applicatif, de l'historique des cartes similaires
+        et des impacts potentiels.
         """
-        return f"""
-Tu es un Product Owner expert avec une approche TRÈS SÉVÈRE dans l'analyse de criticité des tâches.
+        return f'''
+You are a Senior Product Owner and certified Risk Analyst with over 15 years of experience in agile SaaS environments. Your mission is to assess the **criticality** of a Trello card in a **healthcare-grade application**. Your assessment must be based on **business impact, user risk, and technical urgency**, considering all available data.
 
-CONTEXTE DE L'APPLICATION (Extrait des fichiers uploadés):
+━━━━━━━━━━━━━━━━━━
+ APPLICATION CONTEXT:
 {app_context}
 
-HISTORIQUE DES CARDS SIMILAIRES ANALYSÉES:
+ SIMILAR CARDS HISTORY:
 {similar_cards}
 
-CARD À ANALYSER:
-- Titre: {card_data.get('name', 'N/A')}
-- Description: {card_data.get('desc', 'Aucune description')}
-- Labels: {', '.join([label.get('name', '') for label in card_data.get('labels', [])])}
-- Date d'échéance: {card_data.get('due', 'Aucune')}
-- Liste: {card_data.get('list_name', 'N/A')}
-- Membres: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])])}
+ CARD TO ANALYZE:
+- **Title**: {card_data.get('name', 'N/A')}
+- **Description**: {card_data.get('desc', 'No description')}
+- **Labels**: {', '.join([label.get('name', '') for label in card_data.get('labels', [])]) or 'None'}
+- **Due Date**: {card_data.get('due', 'None')}
+- **List Name**: {card_data.get('list_name', 'N/A')}
+- **Members**: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])]) or 'None'}
 
-ÉTAPE 1 - VÉRIFICATION DE CONTEXTE:
-Si cette card concerne une application différente ou un projet sans rapport avec le contexte fourni, réponds EXACTEMENT: "HORS_CONTEXTE"
+━━━━━━━━━━━━━━━━━━
+ STEP 1: CONTEXTUAL RELEVANCE CHECK  
+If the card is **completely unrelated** to the above application context (no logical or functional connection), respond with **exactly**:
+> OUT_OF_CONTEXT
 
-ÉTAPE 2 - ANALYSE DE CRITICITÉ (APPROCHE TRÈS SÉVÈRE):
-Une tâche est considérée comme CRITIQUE uniquement si elle répond à UN ou PLUSIEURS de ces critères STRICTS:
+━━━━━━━━━━━━━━━━━━
+ STEP 2: CRITICALITY ASSESSMENT  
+Evaluate how this card impacts the system's operation, user safety, business workflow, or service reliability.  
+Every task must receive a criticality level. **There are no non-critical tasks.**
 
-🔴 CRITÈRES CRITIQUES ABSOLUS:
-- L'application ou une fonctionnalité PRINCIPALE devient inutilisable
-- Perte ou corruption de données importantes
-- Faille de sécurité ou exposition de données sensibles
-- Impact financier direct et immédiat (perte de revenus)
-- Non-respect de réglementations critiques
-- Application en panne ou inaccessible en production
+CRITICALITY LEVELS:
+-  **HIGH**: Major disruption to production, sensitive data exposure, decision-critical issues, or direct patient/user harm
+-  **MEDIUM**: Significant user or business impact, degraded experience, or operational inefficiencies
+-  **LOW**: Minor improvements, cosmetic changes, documentation, or low-risk refactors
 
-❌ NE SONT GÉNÉRALEMENT PAS CRITIQUES (sauf exception majeure):
-- Améliorations esthétiques (design, couleurs, logos)
-- Optimisations de performance mineures
-- Documentation et guides utilisateur
-- Nouvelles fonctionnalités (même importantes)
-- Corrections de bugs mineurs sans impact majeur
-- Tâches de maintenance préventive
-- Refactoring et nettoyage de code
+━━━━━━━━━━━━━━━━━━
+ DECISION LOGIC:
+1. Use the application context and card content to infer scope and risk.
+2. If necessary, extrapolate the real-world impact.
+3. Assign a level: HIGH, MEDIUM, or LOW.
+4. Provide a **clear and direct justification** explaining why this level was chosen.
 
-ÉTAPE 3 - NIVEAUX DE CRITICITÉ (uniquement si critique):
-- HIGH: Impact immédiat sur l'utilisation en production
-- MEDIUM: Fonctionnalité importante affectée mais contournement possible
-- LOW: Impact limité mais nécessite correction
+━━━━━━━━━━━━━━━━━━
+ FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+Criticality Level: HIGH  
+Justification: [One short paragraph, precise, clear, professional. Mention app context, card content, and impact.]
 
-PROCESSUS DE DÉCISION EN 2 ÉTAPES:
-1. Cette tâche empêche-t-elle le bon fonctionnement PRINCIPAL de l'application ? OUI/NON
-2. Si OUI, quel est le niveau d'impact ? HIGH/MEDIUM/LOW
+━━━━━━━━━━━━━━━━━━
+Now assess this card.
+'''
 
-IMPORTANT: Sois TRÈS SÉLECTIF. La majorité des tâches (80-90%) ne sont PAS critiques.
-
-FORMAT DE RÉPONSE OBLIGATOIRE:
-- "HORS_CONTEXTE" si hors contexte
-- "NON" si pas critique (cas le plus fréquent)
-- "OUI HIGH" si critique impact majeur
-- "OUI MEDIUM" si critique impact modéré
-- "OUI LOW" si critique impact limité
-
-Analyse maintenant cette card:
-"""
 
     def analyze_card_criticality(self, card_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -218,9 +201,8 @@ Analyse maintenant cette card:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
-                    'is_critical': False,
-                    'criticality_level': 'NO_CONTEXT',
-                    'raw_response': "Veuillez uploader un document de description",
+                    'criticality_level': 'LOW',
+                    'justification': "Criticité assignée par défaut (LOW) - Veuillez uploader un document de description pour une analyse plus précise",
                     'analyzed_at': None,
                     'success': True
                 }
@@ -236,57 +218,35 @@ Analyse maintenant cette card:
             response_text = response.text.strip().upper()
             
             # Vérifier d'abord si la card est hors contexte
-            if 'HORS_CONTEXTE' in response_text or 'HORS CONTEXTE' in response_text:
+            if 'OUT_OF_CONTEXT' in response_text:
                 return {
                     'card_id': card_data.get('id'),
                     'card_name': card_data.get('name'),
-                    'is_critical': False,
-                    'criticality_level': 'HORS_CONTEXTE',
-                    'raw_response': "Désolé, je peux vous répondre que selon le contexte de votre document uploadé.",
+                    'criticality_level': 'OUT_OF_CONTEXT',
+                    'justification': "Désolé, je peux vous répondre que selon le contexte de votre document uploadé.",
                     'analyzed_at': None,
                     'success': True
                 }
             
-            # Parser la réponse OUI/NON + niveau
-            is_critical = False
-            criticality_level = 'NON'
+            # Parser la réponse - tous les tickets sont critiques avec un niveau
+            criticality_level = 'LOW'  # Niveau par défaut
             
-            if response_text.startswith('OUI'):
-                is_critical = True
-                if 'HIGH' in response_text:
-                    criticality_level = 'HIGH'
-                elif 'MEDIUM' in response_text:
-                    criticality_level = 'MEDIUM'
-                elif 'LOW' in response_text:
-                    criticality_level = 'LOW'
-                else:
-                    # Si OUI mais pas de niveau spécifié, par défaut MEDIUM
-                    criticality_level = 'MEDIUM'
-            elif response_text == 'NON':
-                is_critical = False
-                criticality_level = 'NON'
+            if 'HIGH' in response_text:
+                criticality_level = 'HIGH'
+            elif 'MEDIUM' in response_text:
+                criticality_level = 'MEDIUM'
+            elif 'LOW' in response_text:
+                criticality_level = 'LOW'
             else:
-                # Fallback pour réponses inattendues
-                current_app.logger.warning(f"Réponse inattendue de Gemini: {response_text}")
-                # Essayer de parser quand même
-                if any(level in response_text for level in ['HIGH', 'MEDIUM', 'LOW']):
-                    is_critical = True
-                    if 'HIGH' in response_text:
-                        criticality_level = 'HIGH'
-                    elif 'MEDIUM' in response_text:
-                        criticality_level = 'MEDIUM'
-                    else:
-                        criticality_level = 'LOW'
-                else:
-                    is_critical = False
-                    criticality_level = 'NON'
+                # Si aucun niveau n'est détecté, assigner LOW par défaut
+                current_app.logger.warning(f"Niveau de criticité non détecté dans la réponse: {response_text}")
+                criticality_level = 'LOW'
             
             result = {
                 'card_id': card_data.get('id'),
                 'card_name': card_data.get('name'),
-                'is_critical': is_critical,
                 'criticality_level': criticality_level,
-                'raw_response': response_text,
+                'justification': response_text,
                 'analyzed_at': None,  # Sera ajouté par la route
                 'success': True
             }
@@ -301,8 +261,7 @@ Analyse maintenant cette card:
             return {
                 'card_id': card_data.get('id'),
                 'card_name': card_data.get('name'),
-                'is_critical': False,
-                'criticality_level': 'NON',  # Valeur par défaut en cas d'erreur
+                'criticality_level': 'LOW',  # Niveau par défaut en cas d'erreur
                 'error': str(e),
                 'success': False
             }
@@ -318,7 +277,6 @@ CARD ANALYSÉE: {card_data.get('name', 'N/A')}
 DESCRIPTION: {card_data.get('desc', 'Aucune')}
 LABELS: {', '.join([label.get('name', '') for label in card_data.get('labels', [])])}
 RÉSULTAT: {analysis_result['criticality_level']}
-CRITIQUE: {'OUI' if analysis_result['is_critical'] else 'NON'}
 BOARD: {card_data.get('board_name', 'N/A')}
             """.strip()
             
@@ -327,8 +285,7 @@ BOARD: {card_data.get('board_name', 'N/A')}
                 'type': 'card_analysis',
                 'card_id': card_data.get('id'),
                 'board_id': card_data.get('board_id'),
-                'criticality_level': analysis_result['criticality_level'],
-                'is_critical': analysis_result['is_critical']
+                'criticality_level': analysis_result['criticality_level']
             }
             
             # Sauvegarder dans ChromaDB
