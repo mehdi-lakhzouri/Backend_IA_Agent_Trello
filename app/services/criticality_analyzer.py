@@ -81,9 +81,10 @@ class CriticalityAnalyzer:
                 context_parts.append(f"=== FICHIER: {file_info['filename']} ===\n{full_content}")
             
             if context_parts:
-                current_app.logger.info(f"Contexte récupéré depuis {len(files_content)} fichiers uploadés")
+                current_app.logger.debug(f"[CRITICALITY] Consultation de fichier de description effectuée: {len(files_content)} fichier(s) utilisé(s)")
                 return "\n\n".join(context_parts)
             else:
+                current_app.logger.warning("[CRITICALITY] Aucun fichier de description consulté, utilisation du contexte par défaut.")
                 return self._get_default_context()
                 
         except Exception as e:

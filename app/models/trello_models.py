@@ -311,3 +311,48 @@ class Tickets(db.Model):
     def exists_by_trello_id(cls, trello_ticket_id):
         """Vérifie si un ticket avec cet ID Trello existe déjà."""
         return cls.query.filter_by(trello_ticket_id=trello_ticket_id).first() is not None
+    
+    @classmethod
+    def has_valid_analysis(cls, trello_ticket_id):
+        """Vérifie si un ticket a une analyse valide en cache."""
+        ticket = cls.get_by_trello_id(trello_ticket_id)
+        if not ticket or not ticket.ticket_metadata:
+            return False
+        return ticket.ticket_metadata.get('analysis_result') is not None
+    
+    @classmethod
+    def get_cached_analysis(cls, trello_ticket_id):
+        """Récupère le résultat d'analyse en cache pour un ticket."""
+        ticket = cls.get_by_trello_id(trello_ticket_id)
+        if ticket and ticket.ticket_metadata:
+            return ticket.ticket_metadata.get('analysis_result')
+        return None
+    
+    @classmethod
+    def invalidate_analysis_cache(cls, trello_ticket_id):
+        """Supprime le cache d'analyse pour forcer une réanalyse."""
+        ticket = cls.get_by_trello_id(trello_ticket_id)
+        if ticket and ticket.ticket_metadata:
+            # Supprimer le résultat d'analyse du metadata
+            metadata = ticket.ticket_metadata.copy()
+            metadata.pop('analysis_result', None)
+            ticket.ticket_metadata = metadata
+            db.session.commit()
+            return True
+        return False
+    
+    @classmethod
+    def clear_all_analysis_cache(cls):
+        """Supprime tous les caches d'analyse pour forcer une réanalyse complète."""
+        try:
+            tickets = cls.query.all()
+            for ticket in tickets:
+                if ticket.ticket_metadata and 'analysis_result' in ticket.ticket_metadata:
+                    metadata = ticket.ticket_metadata.copy()
+                    metadata.pop('analysis_result', None)
+                    ticket.ticket_metadata = metadata
+            db.session.commit()
+            return len(tickets)
+        except Exception as e:
+            db.session.rollback()
+            raise e

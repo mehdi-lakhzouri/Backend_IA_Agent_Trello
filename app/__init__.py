@@ -11,6 +11,33 @@ from app.db import db
 from flask_migrate import Migrate
 
 def create_app():
+    # Centraliser les logs Flask dans le même fichier que agent_analyse
+    import logging
+    from logging.handlers import RotatingFileHandler
+    logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+    os.makedirs(logs_dir, exist_ok=True)
+    log_filename = f"agent_analyse_{__import__('datetime').datetime.now().strftime('%Y%m%d')}.log"
+    log_filepath = os.path.join(logs_dir, log_filename)
+    flask_logger = logging.getLogger('werkzeug')
+    app_logger = logging.getLogger()
+    # Éviter les doublons
+    if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == log_filepath for h in app_logger.handlers):
+        file_handler = RotatingFileHandler(
+            log_filepath,
+            maxBytes=10*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.DEBUG)
+        app_logger.addHandler(file_handler)
+        flask_logger.addHandler(file_handler)
+        app_logger.setLevel(logging.DEBUG)
+        flask_logger.setLevel(logging.INFO)
     """Factory pattern pour créer l'instance Flask."""
     
     # Charger les variables d'environnement

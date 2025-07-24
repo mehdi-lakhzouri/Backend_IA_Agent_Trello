@@ -447,7 +447,7 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
                 else:
                     logger.info(f"Config ID {config_info['config_id']} - Board: {board_name}, List: {list_name}")
                     if config_info['config_data'].get('list_id'):
-                        logger.warning("  Erreur lors de l'analyse des cartes")
+                        logger.warning(f"  Erreur lors de l'analyse des cartes: {analysis_result.get('error', 'Erreur inconnue')}")
                     else:
                         logger.info("  Pas de list_id - analyse des cartes ignorée")
             
