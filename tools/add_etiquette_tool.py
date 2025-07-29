@@ -152,11 +152,39 @@ def apply_criticality_label_with_creation(card_id: str, board_id: str, token: st
     api_key = os.environ.get('TRELLO_API_KEY')
     if not api_key:
         raise ValueError("TRELLO_API_KEY environment variable is not set")
-    
+
+    # Définir les noms d'étiquettes de priorité possibles
+    priority_labels = [
+        "Priority - High",
+        "Priority - Medium",
+        "Priority - Low"
+    ]
+
+    # Récupérer les labels déjà appliqués à la carte
+    card_labels_url = f"https://api.trello.com/1/cards/{card_id}/labels"
+    params = {
+        'key': api_key,
+        'token': token
+    }
+    response = requests.get(card_labels_url, params=params)
+    response.raise_for_status()
+    card_labels = response.json()
+
+    # Supprimer les anciennes étiquettes de priorité
+    for label in card_labels:
+        if label['name'] in priority_labels:
+            delete_url = f"https://api.trello.com/1/cards/{card_id}/idLabels/{label['id']}"
+            del_params = {
+                'key': api_key,
+                'token': token
+            }
+            del_resp = requests.delete(delete_url, params=del_params)
+            del_resp.raise_for_status()
+
     # Get or create the label
     label_id = get_or_create_criticality_label(board_id, token, criticality_level)
-    
-    # Apply label to the card
+
+    # Apply label to the card (correct endpoint)
     url = f"https://api.trello.com/1/cards/{card_id}/idLabels"
     params = {
         'key': api_key,

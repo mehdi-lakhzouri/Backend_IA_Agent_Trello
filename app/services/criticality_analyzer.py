@@ -134,7 +134,7 @@ class CriticalityAnalyzer:
         et des impacts potentiels.
         """
         return f'''
-You are a Senior Product Owner and certified Risk Analyst with over 15 years of experience in agile SaaS environments. Your mission is to assess the **criticality** of a Trello card in a **healthcare-grade application**. Your assessment must be based on **business impact, user risk, and technical urgency**, considering all available data.
+You are a Senior Product Owner and certified Risk Analyst with over 15 years of experience in agile SaaS environments. Your mission is to assess the **criticality** of a Trello card . Your assessment must be based on **business impact, user risk, and technical urgency**, considering all available data.
 
 ━━━━━━━━━━━━━━━━━━
  APPLICATION CONTEXT:
@@ -168,10 +168,10 @@ CRITICALITY LEVELS:
 
 ━━━━━━━━━━━━━━━━━━
  DECISION LOGIC:
-1. Use the application context and card content to infer scope and risk.
+1. Use the application context and use it in an efficient manner with card content to infer scope and risk.
 2. If necessary, extrapolate the real-world impact.
 3. Assign a level: HIGH, MEDIUM, or LOW.
-4. Provide a **clear and direct justification** explaining why this level was chosen.
+4. Provide a **clear and direct justification maximum 3-5 sentences** explaining why this level was chosen .
 
 ━━━━━━━━━━━━━━━━━━
  FORMAT YOUR RESPONSE EXACTLY LIKE THIS:

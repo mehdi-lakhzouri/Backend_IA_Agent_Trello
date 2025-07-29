@@ -1,4 +1,6 @@
 from flask import Blueprint, jsonify, request
+import logging
+logger = logging.getLogger('agent_analyse')
 import os
 from datetime import datetime
 from app.services.trello_service import get_trello_user_info
@@ -9,12 +11,12 @@ from app.utils.crypto_service import crypto_service
 from app.services.database_service import DatabaseService
 from sqlalchemy import func
 import requests
-
+from tools.add_comment_tool import add_comment_to_card
 import traceback
 import html
 import re
-
-
+from tools.add_etiquette_tool import apply_criticality_label_with_creation
+from tools.add_etiquette_tool import apply_criticality_label_with_creation
 trello_bp = Blueprint('trello', __name__)
 
 # Note: Les routes de connexion Trello sont maintenant gérées côté frontend
@@ -105,7 +107,7 @@ def analyze_list_cards(board_id, list_id):
         saved_tickets = []
         
 
-        from tools.add_etiquette_tool import apply_criticality_label_with_creation
+        
 
         for card in cards_data:
             # Vérifier si le ticket a déjà été analysé
@@ -151,18 +153,35 @@ def analyze_list_cards(board_id, list_id):
             result['analyzed_at'] = datetime.now().isoformat()
             analysis_results.append(result)
 
-            # Appliquer le label de criticité sur la carte
-            criticity = result.get('criticality_level')
-            if result.get('success') and criticity in ['HIGH', 'MEDIUM', 'LOW']:
-                try:
+
+
+            # Ajouter l'étiquette de criticité sur la carte Trello après analyse
+            try:
+                if result.get('success', False) and result.get('criticality_level'):
+                    logger.info(f"Ajout de l'étiquette '{result['criticality_level']}' sur la carte {card['id']} ({card['name']})")
                     apply_criticality_label_with_creation(
                         card_id=card['id'],
                         board_id=board_id,
                         token=token,
-                        criticality_level=criticity
+                        criticality_level=result['criticality_level']
                     )
-                except Exception as label_error:
-                    print(f"Erreur lors de l'application du label sur la carte Trello {card['id']}: {str(label_error)}")
+                    logger.info(f"Étiquette '{result['criticality_level']}' ajoutée avec succès sur la carte {card['id']}")
+            except Exception as label_error:
+                logger.error(f"Erreur lors de l'ajout de l'étiquette sur la carte {card['id']} : {str(label_error)}")
+
+            # Ajouter la justification comme commentaire sur la carte Trello
+            try:
+                justification = result.get('justification')
+                if result.get('success', False) and justification:
+                    logger.info(f"Ajout du commentaire (justification) sur la carte {card['id']} ({card['name']})")
+                    add_comment_to_card(
+                        card_id=card['id'],
+                        token=token,
+                        comment=justification
+                    )
+                    logger.info(f"Commentaire ajouté avec succès sur la carte {card['id']}")
+            except Exception as comment_error:
+                logger.error(f"Erreur lors de l'ajout du commentaire sur la carte {card['id']} : {str(comment_error)}")
 
             # Si analyse_board_id est fourni, sauvegarder dans la table tickets
             if analyse_board_id and result.get('success', False):
@@ -274,7 +293,7 @@ def add_label_to_card(card_id):
         if criticality_level.upper() not in ['HIGH', 'MEDIUM', 'LOW']:
             return jsonify({"error": "criticality_level doit être HIGH, MEDIUM ou LOW"}), 400
         
-        from tools.add_etiquette_tool import apply_criticality_label_with_creation
+        
         
         # Appliquer le label sur la carte
         try:
@@ -329,7 +348,7 @@ def add_comment_to_card_endpoint(card_id):
             if not data.get(field):
                 return jsonify({"error": f"Champ {field} requis"}), 400
         
-        from tools.add_comment_tool import add_comment_to_card
+        
         
         # Ajouter le commentaire à la carte
         try:
@@ -358,7 +377,6 @@ def add_comment_to_card_endpoint(card_id):
 
 
 
-# Function removed - was conflicting with config_board_subscription endpoint
 
 
 @trello_bp.route('/api/trello/card/<card_id>/analyze', methods=['POST'])

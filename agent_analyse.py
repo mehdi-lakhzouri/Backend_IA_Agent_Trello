@@ -13,6 +13,8 @@ from datetime import datetime
 from typing import List, Dict, Any
 import requests
 from logging.handlers import RotatingFileHandler
+from tools.add_etiquette_tool import apply_criticality_label_with_creation
+from tools.add_comment_tool import add_comment_to_card
 
 # Ajouter le répertoire racine au path pour les imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -229,7 +231,7 @@ def analyze_board_list_via_api(analyse_board: AnalyseBoard, config_data: Dict[st
         logger.debug(f"Appel API: {api_url}")
         
         # Appel à l'API
-        response = requests.post(api_url, json=payload, timeout=60)
+        response = requests.post(api_url, json=payload, timeout=240)
         response.raise_for_status()
         
         result = response.json()
@@ -238,16 +240,17 @@ def analyze_board_list_via_api(analyse_board: AnalyseBoard, config_data: Dict[st
             cards_count = result.get('board_analysis', {}).get('total_cards', 0)
             tickets_saved = result.get('tickets_saved_count', 0)
             criticality_dist = result.get('board_analysis', {}).get('criticality_distribution', {})
-            
+
             logger.info(f"Analyse terminée avec succès - {cards_count} cartes, {tickets_saved} tickets sauvegardés")
             logger.debug(f"Distribution criticité: {criticality_dist}")
-            
+
             return {
                 'success': True,
                 'board_analysis': result.get('board_analysis', {}),
                 'cards_count': cards_count,
                 'tickets_saved': tickets_saved,
-                'criticality_distribution': criticality_dist
+                'criticality_distribution': criticality_dist,
+                'cards_analysis': result.get('cards_analysis', [])
             }
         else:
             error_msg = result.get('error', 'Erreur inconnue lors de l\'analyse')
@@ -307,7 +310,7 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                 logger.info(f"Traitement de la configuration ID: {config.id}")
                 logger.debug(f"Board: {config_data['board_name']} ({config_data['board_id']})")
                 logger.debug(f"List: {config_data.get('list_name', 'N/A')} ({config_data.get('list_id', 'N/A')})")
-                
+                  
                 # Vérifier que les données essentielles sont présentes
                 if not config_data['token'] or not config_data['board_id']:
                     error_msg = "Configuration incomplète - Token ou Board ID manquant"
@@ -338,6 +341,8 @@ def process_all_configurations() -> List[Dict[str, Any]]:
                         logger.debug(f"Criticité HIGH: {criticality_dist.get('HIGH', 0)}, "
                                    f"MEDIUM: {criticality_dist.get('MEDIUM', 0)}, "
                                    f"LOW: {criticality_dist.get('LOW', 0)}")
+                        # Plus d'appel local des tools : tout est géré côté API Flask
+                        logger.debug("Traitement des cartes (labels/commentaires) délégué à l'API Flask.")
                     else:
                         logger.error(f"Erreur lors de l'analyse des cartes: {analysis_result.get('error', 'Erreur inconnue')}")
                 else:
