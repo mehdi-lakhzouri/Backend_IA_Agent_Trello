@@ -265,7 +265,7 @@ class Tickets(db.Model):
     __tablename__ = 'tickets'
     id_ticket = db.Column(db.Integer, primary_key=True, autoincrement=True)
     analyse_board_id = db.Column(db.Integer, db.ForeignKey('analyse_board.id'), nullable=False)
-    trello_ticket_id = db.Column(db.String(255), unique=True, nullable=True)
+    trello_ticket_id = db.Column(db.String(255), nullable=True)  # Supprimé unique=True pour permettre les réanalyses
     ticket_metadata = db.Column(db.JSON, nullable=True)
     criticality_level = db.Column(db.Enum('low', 'medium', 'high', name='criticality_level_enum'), nullable=True)
     createdAt = db.Column(db.DateTime, default=datetime.utcnow)
@@ -304,10 +304,22 @@ class Tickets(db.Model):
 
     @classmethod
     def get_by_trello_id(cls, trello_ticket_id):
-        """Récupère un ticket par son ID Trello."""
-        return cls.query.filter_by(trello_ticket_id=trello_ticket_id).first()
+        """Récupère le dernier ticket par son ID Trello (le plus récent)."""
+        return cls.query.filter_by(trello_ticket_id=trello_ticket_id)\
+                       .order_by(cls.createdAt.desc()).first()
+
+    @classmethod
+    def get_all_by_trello_id(cls, trello_ticket_id):
+        """Récupère tous les tickets avec cet ID Trello, triés par date de création (plus récent en premier)."""
+        return cls.query.filter_by(trello_ticket_id=trello_ticket_id)\
+                       .order_by(cls.createdAt.desc()).all()
 
     @classmethod
     def exists_by_trello_id(cls, trello_ticket_id):
-        """Vérifie si un ticket avec cet ID Trello existe déjà."""
+        """Vérifie si au moins un ticket avec cet ID Trello existe."""
         return cls.query.filter_by(trello_ticket_id=trello_ticket_id).first() is not None
+
+    @classmethod
+    def count_by_trello_id(cls, trello_ticket_id):
+        """Compte le nombre de tickets avec cet ID Trello."""
+        return cls.query.filter_by(trello_ticket_id=trello_ticket_id).count()

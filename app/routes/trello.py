@@ -1,8 +1,11 @@
 from flask import Blueprint, jsonify, request
 import os
+import html
+import re
 from datetime import datetime
 from app.services.trello_service import get_trello_user_info
 from app.services.criticality_analyzer import CriticalityAnalyzer
+from app.services.ticket_reanalysis_service import TicketReanalysisService
 from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary, Config, Analyse, AnalyseBoard, Tickets
 from app import db
 from app.utils.crypto_service import crypto_service
@@ -710,3 +713,791 @@ def get_tickets():
             "status": "error",
             "message": f"Erreur serveur: {str(e)}"
         }), 500
+
+
+@trello_bp.route('/api/trello/ticket/<trello_ticket_id>/reanalyze', methods=['POST'])
+def reanalyze_ticket(trello_ticket_id):
+    """
+    Réanalyse un ticket spécifique en créant TOUJOURS une nouvelle analyse, analyse_board et ticket.
+    Permet plusieurs réanalyses du même ticket avec des noms incrémentés (reanalyse_1, reanalyse_2, etc.).
+    
+    Body JSON (optionnel):
+    {
+        "config_id": integer  // ID de la configuration à utiliser (optionnel, utilise la dernière si non fourni)
+    }
+    
+    Response:
+    {
+        "success": boolean,
+        "analysis": {...},      // Détails de la nouvelle analyse créée
+        "analysis_board": {...}, // Détails de l'analyse_board créée  
+        "ticket": {...},        // Détails du nouveau ticket créé
+        "criticality_analysis": {...}, // Résultat de l'analyse IA
+        "config_used": {...},   // Configuration utilisée
+        "reanalysis_info": {...} // Informations sur la réanalyse
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        config_id = data.get('config_id')
+        
+        # Récupérer la configuration
+        if config_id:
+            config = Config.query.get(config_id)
+        else:
+            config = Config.get_latest_config()
+            
+        if not config:
+            return jsonify({
+                "success": False,
+                "error": "Aucune configuration trouvée",
+                "error_code": "NO_CONFIG"
+            }), 404
+        
+        config_data = config.config_data
+        token = config_data.get('token')
+        
+        if not token:
+            return jsonify({
+                "success": False,
+                "error": "Token Trello manquant dans la configuration",
+                "error_code": "NO_TOKEN"
+            }), 400
+        
+        # Compter les analyses existantes pour ce ticket
+        existing_analyses = Tickets.query.filter(
+            Tickets.trello_ticket_id.like(f"{trello_ticket_id}%")
+        ).count()
+        reanalysis_number = existing_analyses + 1
+        is_reanalysis = existing_analyses > 0
+        
+        # Récupérer les données du ticket depuis Trello OU créer des données de test
+        card_data = None
+        try:
+            card_url = f"https://api.trello.com/1/cards/{trello_ticket_id}"
+            params = {
+                'key': os.environ.get('TRELLO_API_KEY'),
+                'token': token,
+                'fields': 'id,name,desc,due,url,dateLastActivity,idBoard,idList',
+                'board': 'true',
+                'list': 'true'
+            }
+            
+            response = requests.get(card_url, params=params)
+            response.raise_for_status()
+            card_data = response.json()
+            
+        except requests.exceptions.RequestException as e:
+            # Si le ticket n'existe pas sur Trello (cas de test), créer des données fictives
+            print(f"⚠️ Ticket non trouvé sur Trello, création de données de test: {str(e)}")
+            card_data = {
+                'id': trello_ticket_id,
+                'name': f"Ticket Test {trello_ticket_id}",
+                'desc': "Description de test pour la réanalyse",
+                'due': None,
+                'url': f"https://trello.com/c/{trello_ticket_id}",
+                'board': {
+                    'id': config_data.get('boardId', 'TEST_BOARD'),
+                    'name': config_data.get('boardName', 'Board de Test')
+                },
+                'list': {
+                    'id': config_data.get('listId', 'TEST_LIST'),
+                    'name': config_data.get('listName', 'Liste de Test')
+                },
+                'labels': [],
+                'members': []
+            }
+        
+        # Créer le nom du ticket avec comptage
+        original_name = card_data['name']
+        if is_reanalysis:
+            ticket_name = f"{original_name} - reanalyse_{reanalysis_number}"
+        else:
+            ticket_name = f"{original_name} - reanalyse_1"
+        
+        # 1. Créer une nouvelle analyse
+        analysis_reference = f"analyse_{trello_ticket_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{reanalysis_number}"
+        new_analysis = Analyse(reference=analysis_reference)
+        db.session.add(new_analysis)
+        db.session.flush()  # Pour obtenir l'ID
+        
+        # 2. Créer une nouvelle analyse_board
+        new_analysis_board = AnalyseBoard(
+            analyse_id=new_analysis.analyse_id,
+            platform="trello"
+        )
+        db.session.add(new_analysis_board)
+        db.session.flush()  # Pour obtenir l'ID
+        
+        # 3. Préparer les données pour l'analyse IA
+        trello_card_data = {
+            'id': card_data['id'],
+            'name': ticket_name,  # Utiliser le nom avec comptage
+            'desc': card_data.get('desc', ''),
+            'due': card_data.get('due'),
+            'list_name': card_data.get('list', {}).get('name', 'Liste inconnue'),
+            'board_id': card_data.get('board', {}).get('id', config_data.get('boardId', '')),
+            'board_name': card_data.get('board', {}).get('name', config_data.get('boardName', '')),
+            'labels': card_data.get('labels', []),
+            'members': card_data.get('members', []),
+            'url': card_data['url']
+        }
+        
+        # 4. Analyser la criticité avec l'IA
+        analyzer = CriticalityAnalyzer()
+        criticality_result = analyzer.analyze_card_criticality(trello_card_data)
+        
+        # 5. Créer un nouveau ticket avec un ID unique
+        ticket_metadata = {
+            'name': ticket_name,
+            'original_name': original_name,
+            'desc': card_data.get('desc', ''),
+            'due': card_data.get('due'),
+            'url': card_data['url'],
+            'labels': card_data.get('labels', []),
+            'members': card_data.get('members', []),
+            'board_info': {
+                'board_id': card_data.get('board', {}).get('id'),
+                'board_name': card_data.get('board', {}).get('name'),
+                'list_id': card_data.get('list', {}).get('id'),
+                'list_name': card_data.get('list', {}).get('name')
+            },
+            'reanalysis_info': {
+                'is_reanalysis': is_reanalysis,
+                'reanalysis_number': reanalysis_number,
+                'original_trello_id': trello_ticket_id,
+                'analysis_reference': analysis_reference,
+                'analyzed_at': datetime.now().isoformat()
+            },
+            'criticality_analysis': criticality_result
+        }
+        
+        # Créer un ID de ticket unique en ajoutant un suffixe au trello_ticket_id original
+        unique_ticket_id = f"{trello_ticket_id}_reanalyse_{reanalysis_number}"
+        
+        new_ticket = Tickets(
+            analyse_board_id=new_analysis_board.id,
+            trello_ticket_id=unique_ticket_id,  # ID unique pour éviter les conflits
+            ticket_metadata=ticket_metadata,
+            criticality_level=criticality_result.get('criticality_level', '').lower() if criticality_result.get('success', False) else None
+        )
+        
+        db.session.add(new_ticket)
+        db.session.flush()  # Pour obtenir l'ID
+        
+        # Commit toutes les modifications
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Réanalyse #{reanalysis_number} créée avec succès pour le ticket {trello_ticket_id}",
+            "analysis": new_analysis.to_dict(),
+            "analysis_board": new_analysis_board.to_dict(),
+            "ticket": new_ticket.to_dict(),
+            "criticality_analysis": criticality_result,
+            "config_used": config.to_dict(),
+            "reanalysis_info": {
+                "is_reanalysis": is_reanalysis,
+                "reanalysis_number": reanalysis_number,
+                "original_trello_id": trello_ticket_id,
+                "unique_ticket_id": unique_ticket_id,
+                "ticket_name": ticket_name,
+                "original_name": original_name,
+                "total_analyses": reanalysis_number,
+                "new_ticket_id": new_ticket.id_ticket
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "success": False,
+            "error": f"Erreur lors de la réanalyse: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
+        }), 500
+
+
+@trello_bp.route('/api/trello/ticket/<trello_ticket_id>/reanalysis-history', methods=['GET'])
+def get_reanalysis_history(trello_ticket_id):
+    """
+    Récupère l'historique de toutes les réanalyses d'un ticket spécifique.
+    
+    Response:
+    {
+        "success": boolean,
+        "original_trello_id": string,
+        "total_reanalyses": integer,
+        "reanalyses": [
+            {
+                "ticket": {...},
+                "analysis": {...},
+                "analysis_board": {...},
+                "reanalysis_number": integer
+            }
+        ]
+    }
+    """
+    try:
+        # Rechercher tous les tickets liés à ce trello_ticket_id
+        # Ils peuvent avoir des IDs comme "ABC123_reanalyse_1", "ABC123_reanalyse_2", etc.
+        tickets = Tickets.query.filter(
+            Tickets.trello_ticket_id.like(f"{trello_ticket_id}%")
+        ).order_by(Tickets.createdAt.desc()).all()
+        
+        if not tickets:
+            return jsonify({
+                "success": True,
+                "original_trello_id": trello_ticket_id,
+                "total_reanalyses": 0,
+                "reanalyses": [],
+                "message": "Aucune réanalyse trouvée pour ce ticket"
+            }), 200
+        
+        reanalyses_details = []
+        
+        for ticket in tickets:
+            # Récupérer les détails de l'analyse et analyse_board
+            analysis_board = AnalyseBoard.query.get(ticket.analyse_board_id)
+            analysis = Analyse.query.get(analysis_board.analyse_id) if analysis_board else None
+            
+            # Extraire le numéro de réanalyse des métadonnées
+            reanalysis_info = ticket.ticket_metadata.get('reanalysis_info', {}) if ticket.ticket_metadata else {}
+            reanalysis_number = reanalysis_info.get('reanalysis_number', 1)
+            
+            reanalysis_detail = {
+                "ticket": ticket.to_dict(),
+                "analysis": analysis.to_dict() if analysis else None,
+                "analysis_board": analysis_board.to_dict() if analysis_board else None,
+                "reanalysis_number": reanalysis_number,
+                "ticket_name": ticket.ticket_metadata.get('name') if ticket.ticket_metadata else None,
+                "original_name": ticket.ticket_metadata.get('original_name') if ticket.ticket_metadata else None
+            }
+            
+            reanalyses_details.append(reanalysis_detail)
+        
+        return jsonify({
+            "success": True,
+            "original_trello_id": trello_ticket_id,
+            "total_reanalyses": len(tickets),
+            "reanalyses": reanalyses_details
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Erreur lors de la récupération de l'historique: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
+        }), 500
+
+
+@trello_bp.route('/api/trello/ticket/<trello_ticket_id>/stats', methods=['GET'])
+def get_ticket_detailed_stats(trello_ticket_id):
+    """
+    Récupère les statistiques détaillées et complètes d'un ticket spécifique avec tous ses détails.
+    
+    URL: /api/trello/ticket/{trello_ticket_id}/stats
+    
+    Response:
+    {
+        "success": boolean,
+        "original_trello_id": "dhzADbj5",
+        "total_reanalyses": 3,
+        "summary": {
+            "first_analysis_date": "2025-07-29T10:30:00",
+            "last_analysis_date": "2025-07-30T15:45:00",
+            "criticality_distribution": {
+                "high": 1,
+                "medium": 2,
+                "low": 0
+            },
+            "latest_criticality": "medium"
+        },
+        "detailed_reanalyses": [
+            {
+                "ticket_id": "dhzADbj5_reanalyse_1",
+                "internal_id": 123,
+                "name": "Ticket Test - reanalyse_1",
+                "description": "Description complète du ticket...",
+                "criticality_level": "high",
+                "created_at": "2025-07-29T10:30:00",
+                "updated_at": "2025-07-29T10:30:00",
+                "reanalysis_number": 1,
+                "board_info": {...},
+                "analysis_reference": "analyse_dhzADbj5_20250729_1030_1",
+                "full_metadata": {...}
+            }
+        ]
+    }
+    """
+    try:
+        # Rechercher tous les tickets liés à ce trello_ticket_id
+        # Format possible: "dhzADbj5", "dhzADbj5_reanalyse_1", "dhzADbj5_reanalyse_2", etc.
+        tickets = Tickets.query.filter(
+            Tickets.trello_ticket_id.like(f"{trello_ticket_id}%")
+        ).order_by(Tickets.createdAt.asc()).all()
+        
+        if not tickets:
+            return jsonify({
+                "success": True,
+                "original_trello_id": trello_ticket_id,
+                "total_reanalyses": 0,
+                "message": "Aucune réanalyse trouvée pour ce ticket",
+                "summary": {
+                    "first_analysis_date": None,
+                    "last_analysis_date": None,
+                    "criticality_distribution": {"high": 0, "medium": 0, "low": 0},
+                    "latest_criticality": None
+                },
+                "detailed_reanalyses": []
+            }), 200
+        
+        # Préparer les détails de chaque réanalyse
+        detailed_reanalyses = []
+        criticality_counts = {"high": 0, "medium": 0, "low": 0}
+        latest_criticality = None
+        
+        for ticket in tickets:
+            # Récupérer les détails de l'analyse et analyse_board
+            analysis_board = AnalyseBoard.query.get(ticket.analyse_board_id)
+            analysis = Analyse.query.get(analysis_board.analyse_id) if analysis_board else None
+            
+            # Extraire les métadonnées du ticket
+            metadata = ticket.ticket_metadata or {}
+            reanalysis_info = metadata.get('reanalysis_info', {})
+            board_info = metadata.get('board_info', {})
+            criticality_analysis = metadata.get('criticality_analysis', {})
+            
+            # Compter les criticités
+            if ticket.criticality_level:
+                criticality_counts[ticket.criticality_level] += 1
+                latest_criticality = ticket.criticality_level
+            
+            # Construire les détails de cette réanalyse
+            reanalysis_detail = {
+                "ticket_id": ticket.trello_ticket_id,
+                "internal_id": ticket.id_ticket,
+                "name": metadata.get('name', 'Nom non disponible'),
+                "original_name": metadata.get('original_name', 'Nom original non disponible'),
+                "description": metadata.get('desc', 'Description non disponible'),
+                "criticality_level": ticket.criticality_level,
+                "created_at": ticket.createdAt.isoformat() if ticket.createdAt else None,
+                "updated_at": ticket.updatedAt.isoformat() if ticket.updatedAt else None,
+                "reanalysis_number": reanalysis_info.get('reanalysis_number', 1),
+                "is_reanalysis": reanalysis_info.get('is_reanalysis', False),
+                "analysis_reference": reanalysis_info.get('analysis_reference', 'Non disponible'),
+                "analyzed_at": reanalysis_info.get('analyzed_at', None),
+                "url": metadata.get('url', 'URL non disponible'),
+                "due_date": metadata.get('due', None),
+                "labels": metadata.get('labels', []),
+                "members": metadata.get('members', []),
+                "board_info": {
+                    "board_id": board_info.get('board_id', 'Non disponible'),
+                    "board_name": board_info.get('board_name', 'Non disponible'),
+                    "list_id": board_info.get('list_id', 'Non disponible'),
+                    "list_name": board_info.get('list_name', 'Non disponible')
+                },
+                "analysis_info": {
+                    "analysis_id": analysis.analyse_id if analysis else None,
+                    "analysis_reference": analysis.reference if analysis else None,
+                    "analysis_created_at": analysis.createdAt.isoformat() if analysis and analysis.createdAt else None,
+                    "analysis_board_id": analysis_board.id if analysis_board else None,
+                    "platform": analysis_board.platform if analysis_board else None
+                },
+                "criticality_analysis": {
+                    "ai_success": criticality_analysis.get('success', False),
+                    "ai_reasoning": criticality_analysis.get('reasoning', 'Non disponible'),
+                    "ai_factors": criticality_analysis.get('factors', {}),
+                    "ai_score": criticality_analysis.get('score', None)
+                },
+                "full_metadata": metadata  # Métadonnées complètes pour debug si besoin
+            }
+            
+            detailed_reanalyses.append(reanalysis_detail)
+        
+        # Calculer le résumé
+        summary = {
+            "first_analysis_date": detailed_reanalyses[0]["created_at"] if detailed_reanalyses else None,
+            "last_analysis_date": detailed_reanalyses[-1]["created_at"] if detailed_reanalyses else None,
+            "criticality_distribution": criticality_counts,
+            "latest_criticality": latest_criticality,
+            "total_analyses": len(detailed_reanalyses),
+            "has_descriptions": sum(1 for r in detailed_reanalyses if r["description"] != "Description non disponible"),
+            "has_criticalities": sum(1 for r in detailed_reanalyses if r["criticality_level"] is not None),
+            "analysis_success_rate": round(
+                sum(1 for r in detailed_reanalyses if r["criticality_analysis"]["ai_success"]) / len(detailed_reanalyses) * 100, 2
+            ) if detailed_reanalyses else 0
+        }
+        
+        return jsonify({
+            "success": True,
+            "original_trello_id": trello_ticket_id,
+            "total_reanalyses": len(tickets),
+            "summary": summary,
+            "detailed_reanalyses": detailed_reanalyses
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        print("❌ Erreur dans get_ticket_detailed_stats:")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": f"Erreur lors de la récupération des détails: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
+        }), 500
+
+
+@trello_bp.route('/api/trello/tickets/reanalysis-stats', methods=['POST'])
+def get_tickets_reanalysis_stats():
+    """
+    Récupère les statistiques de réanalyse pour un ou plusieurs tickets.
+    
+    Body JSON:
+    {
+        "ticket_ids": ["trello_id_1", "trello_id_2", ...]  // Liste des IDs Trello à analyser
+    }
+    OU
+    {
+        "ticket_id": "trello_id_single"  // Pour un seul ticket
+    }
+    
+    Response:
+    {
+        "success": boolean,
+        "total_tickets_requested": integer,
+        "tickets_found": integer,
+        "tickets_stats": [
+            {
+                "original_trello_id": "ABC123",
+                "total_reanalyses": 3,
+                "first_analysis_date": "2024-01-15T10:30:00",
+                "last_analysis_date": "2024-01-20T15:45:00",
+                "criticality_levels": {
+                    "high": 1,
+                    "medium": 2,
+                    "low": 0
+                },
+                "latest_criticality": "medium",
+                "all_ticket_ids": [
+                    "ABC123_reanalyse_1",
+                    "ABC123_reanalyse_2", 
+                    "ABC123_reanalyse_3"
+                ]
+            }
+        ],
+        "summary": {
+            "total_reanalyses_all_tickets": 10,
+            "avg_reanalyses_per_ticket": 2.5,
+            "most_reanalyzed_ticket": {
+                "trello_id": "ABC123",
+                "count": 3
+            }
+        }
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "Body JSON requis",
+                "error_code": "MISSING_BODY"
+            }), 400
+        
+        # Récupérer la liste des ticket_ids à analyser
+        ticket_ids = []
+        if 'ticket_ids' in data:
+            ticket_ids = data['ticket_ids']
+            if not isinstance(ticket_ids, list):
+                return jsonify({
+                    "success": False,
+                    "error": "ticket_ids doit être une liste",
+                    "error_code": "INVALID_FORMAT"
+                }), 400
+        elif 'ticket_id' in data:
+            ticket_ids = [data['ticket_id']]
+        else:
+            return jsonify({
+                "success": False,
+                "error": "ticket_ids ou ticket_id requis",
+                "error_code": "MISSING_TICKET_IDS"
+            }), 400
+        
+        if not ticket_ids:
+            return jsonify({
+                "success": False,
+                "error": "Au moins un ticket_id requis",
+                "error_code": "EMPTY_TICKET_IDS"
+            }), 400
+        
+        tickets_stats = []
+        total_reanalyses_all_tickets = 0
+        tickets_found = 0
+        most_reanalyzed_count = 0
+        most_reanalyzed_ticket = None
+        
+        for trello_ticket_id in ticket_ids:
+            # Rechercher tous les tickets liés à ce trello_ticket_id
+            # Format: "ABC123_reanalyse_1", "ABC123_reanalyse_2", etc.
+            tickets = Tickets.query.filter(
+                Tickets.trello_ticket_id.like(f"{trello_ticket_id}%")
+            ).order_by(Tickets.createdAt.asc()).all()
+            
+            if not tickets:
+                # Ticket non trouvé, on l'ajoute quand même avec 0 réanalyses
+                tickets_stats.append({
+                    "original_trello_id": trello_ticket_id,
+                    "total_reanalyses": 0,
+                    "first_analysis_date": None,
+                    "last_analysis_date": None,
+                    "criticality_levels": {
+                        "high": 0,
+                        "medium": 0,
+                        "low": 0
+                    },
+                    "latest_criticality": None,
+                    "all_ticket_ids": [],
+                    "status": "not_found"
+                })
+                continue
+            
+            tickets_found += 1
+            total_reanalyses = len(tickets)
+            total_reanalyses_all_tickets += total_reanalyses
+            
+            # Calculer les statistiques de criticité
+            criticality_counts = {"high": 0, "medium": 0, "low": 0}
+            latest_criticality = None
+            all_ticket_ids = []
+            
+            for ticket in tickets:
+                all_ticket_ids.append(ticket.trello_ticket_id)
+                if ticket.criticality_level:
+                    criticality_counts[ticket.criticality_level] += 1
+                    # Le dernier ticket dans la liste (ordre croissant) a la criticité la plus récente
+                    latest_criticality = ticket.criticality_level
+            
+            # Déterminer le ticket le plus réanalysé
+            if total_reanalyses > most_reanalyzed_count:
+                most_reanalyzed_count = total_reanalyses
+                most_reanalyzed_ticket = trello_ticket_id
+            
+            ticket_stats = {
+                "original_trello_id": trello_ticket_id,
+                "total_reanalyses": total_reanalyses,
+                "first_analysis_date": tickets[0].createdAt.isoformat() if tickets[0].createdAt else None,
+                "last_analysis_date": tickets[-1].createdAt.isoformat() if tickets[-1].createdAt else None,
+                "criticality_levels": criticality_counts,
+                "latest_criticality": latest_criticality,
+                "all_ticket_ids": all_ticket_ids,
+                "status": "found"
+            }
+            
+            tickets_stats.append(ticket_stats)
+        
+        # Calculer la moyenne de réanalyses par ticket (seulement pour les tickets trouvés)
+        avg_reanalyses_per_ticket = (
+            total_reanalyses_all_tickets / tickets_found 
+            if tickets_found > 0 
+            else 0
+        )
+        
+        summary = {
+            "total_reanalyses_all_tickets": total_reanalyses_all_tickets,
+            "avg_reanalyses_per_ticket": round(avg_reanalyses_per_ticket, 2),
+            "most_reanalyzed_ticket": {
+                "trello_id": most_reanalyzed_ticket,
+                "count": most_reanalyzed_count
+            } if most_reanalyzed_ticket else None
+        }
+        
+        return jsonify({
+            "success": True,
+            "total_tickets_requested": len(ticket_ids),
+            "tickets_found": tickets_found,
+            "tickets_stats": tickets_stats,
+            "summary": summary
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Erreur lors de la récupération des statistiques: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
+        }), 500
+
+
+@trello_bp.route('/api/trello/tickets/all-reanalysis-stats', methods=['GET'])
+def get_all_tickets_reanalysis_stats():
+    """
+    Récupère les statistiques de réanalyse pour TOUS les tickets dans la base de données.
+    Regroupe automatiquement les tickets par leur ID Trello original.
+    
+    Query parameters:
+    - limit: Nombre maximum de tickets à retourner (défaut: 50)
+    - offset: Décalage pour la pagination (défaut: 0)
+    - sort_by: Critère de tri ('total_reanalyses', 'last_analysis', 'first_analysis') (défaut: 'total_reanalyses')
+    - order: Ordre de tri ('desc' ou 'asc') (défaut: 'desc')
+    
+    Response:
+    {
+        "success": boolean,
+        "total_unique_tickets": integer,
+        "returned_tickets": integer,
+        "pagination": {...},
+        "tickets_stats": [...],
+        "global_summary": {...}
+    }
+    """
+    try:
+        # Paramètres de pagination et tri
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        sort_by = request.args.get('sort_by', 'total_reanalyses')
+        order = request.args.get('order', 'desc')
+        
+        # Valider les paramètres
+        if limit > 200:
+            limit = 200  # Limite maximale pour éviter les surcharges
+        
+        valid_sort_fields = ['total_reanalyses', 'last_analysis', 'first_analysis']
+        if sort_by not in valid_sort_fields:
+            sort_by = 'total_reanalyses'
+            
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+        
+        # Récupérer tous les tickets et les regrouper par ID Trello original
+        all_tickets = Tickets.query.order_by(Tickets.createdAt.asc()).all()
+        
+        # Regrouper par ID Trello original (extraire l'ID original des IDs avec suffixes)
+        tickets_by_original_id = {}
+        
+        for ticket in all_tickets:
+            trello_id = ticket.trello_ticket_id
+            if not trello_id:
+                continue
+                
+            # Extraire l'ID original (enlever le suffixe "_reanalyse_X")
+            original_id = trello_id
+            if '_reanalyse_' in trello_id:
+                original_id = trello_id.split('_reanalyse_')[0]
+            
+            if original_id not in tickets_by_original_id:
+                tickets_by_original_id[original_id] = []
+            
+            tickets_by_original_id[original_id].append(ticket)
+        
+        # Calculer les statistiques pour chaque groupe
+        tickets_stats = []
+        total_reanalyses_global = 0
+        
+        for original_id, ticket_group in tickets_by_original_id.items():
+            # Trier les tickets par date de création
+            sorted_tickets = sorted(ticket_group, key=lambda t: t.createdAt or datetime.min)
+            
+            total_reanalyses = len(sorted_tickets)
+            total_reanalyses_global += total_reanalyses
+            
+            # Calculer les statistiques de criticité
+            criticality_counts = {"high": 0, "medium": 0, "low": 0}
+            latest_criticality = None
+            all_ticket_ids = []
+            
+            for ticket in sorted_tickets:
+                all_ticket_ids.append(ticket.trello_ticket_id)
+                if ticket.criticality_level:
+                    criticality_counts[ticket.criticality_level] += 1
+                    latest_criticality = ticket.criticality_level
+            
+            ticket_stats = {
+                "original_trello_id": original_id,
+                "total_reanalyses": total_reanalyses,
+                "first_analysis_date": sorted_tickets[0].createdAt.isoformat() if sorted_tickets[0].createdAt else None,
+                "last_analysis_date": sorted_tickets[-1].createdAt.isoformat() if sorted_tickets[-1].createdAt else None,
+                "criticality_levels": criticality_counts,
+                "latest_criticality": latest_criticality,
+                "all_ticket_ids": all_ticket_ids
+            }
+            
+            tickets_stats.append(ticket_stats)
+        
+        # Trier les résultats
+        reverse_order = (order == 'desc')
+        
+        if sort_by == 'total_reanalyses':
+            tickets_stats.sort(key=lambda x: x['total_reanalyses'], reverse=reverse_order)
+        elif sort_by == 'last_analysis':
+            tickets_stats.sort(
+                key=lambda x: x['last_analysis_date'] or '1900-01-01T00:00:00', 
+                reverse=reverse_order
+            )
+        elif sort_by == 'first_analysis':
+            tickets_stats.sort(
+                key=lambda x: x['first_analysis_date'] or '1900-01-01T00:00:00', 
+                reverse=reverse_order
+            )
+        
+        # Pagination
+        total_unique_tickets = len(tickets_stats)
+        paginated_stats = tickets_stats[offset:offset + limit]
+        
+        # Calculer le résumé global
+        if tickets_stats:
+            avg_reanalyses = total_reanalyses_global / len(tickets_stats)
+            most_reanalyzed = max(tickets_stats, key=lambda x: x['total_reanalyses'])
+            
+            global_summary = {
+                "total_reanalyses_all_tickets": total_reanalyses_global,
+                "avg_reanalyses_per_ticket": round(avg_reanalyses, 2),
+                "most_reanalyzed_ticket": {
+                    "trello_id": most_reanalyzed['original_trello_id'],
+                    "count": most_reanalyzed['total_reanalyses']
+                },
+                "total_unique_original_tickets": len(tickets_stats),
+                "criticality_distribution": {
+                    "high": sum(stats['criticality_levels']['high'] for stats in tickets_stats),
+                    "medium": sum(stats['criticality_levels']['medium'] for stats in tickets_stats),
+                    "low": sum(stats['criticality_levels']['low'] for stats in tickets_stats)
+                }
+            }
+        else:
+            global_summary = {
+                "total_reanalyses_all_tickets": 0,
+                "avg_reanalyses_per_ticket": 0,
+                "most_reanalyzed_ticket": None,
+                "total_unique_original_tickets": 0,
+                "criticality_distribution": {"high": 0, "medium": 0, "low": 0}
+            }
+        
+        pagination_info = {
+            "limit": limit,
+            "offset": offset,
+            "total_items": total_unique_tickets,
+            "returned_items": len(paginated_stats),
+            "has_next": (offset + limit) < total_unique_tickets,
+            "has_prev": offset > 0,
+            "next_offset": offset + limit if (offset + limit) < total_unique_tickets else None,
+            "prev_offset": max(0, offset - limit) if offset > 0 else None
+        }
+        
+        return jsonify({
+            "success": True,
+            "total_unique_tickets": total_unique_tickets,
+            "returned_tickets": len(paginated_stats),
+            "pagination": pagination_info,
+            "sort": {
+                "sort_by": sort_by,
+                "order": order
+            },
+            "tickets_stats": paginated_stats,
+            "global_summary": global_summary
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Erreur lors de la récupération des statistiques globales: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
+        }), 500
+
