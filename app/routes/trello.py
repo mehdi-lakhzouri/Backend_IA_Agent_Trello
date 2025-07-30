@@ -1,4 +1,6 @@
 from flask import Blueprint, jsonify, request
+import logging
+logger = logging.getLogger('agent_analyse')
 import os
 from datetime import datetime
 from app.services.trello_service import get_trello_user_info
@@ -9,9 +11,12 @@ from app.utils.crypto_service import crypto_service
 from app.services.database_service import DatabaseService
 from sqlalchemy import func
 import requests
+from tools.add_comment_tool import add_comment_to_card
 import traceback
-
-
+import html
+import re
+from tools.add_etiquette_tool import apply_criticality_label_with_creation
+from tools.add_etiquette_tool import apply_criticality_label_with_creation
 trello_bp = Blueprint('trello', __name__)
 
 # Note: Les routes de connexion Trello sont maintenant gérées côté frontend
@@ -101,8 +106,34 @@ def analyze_list_cards(board_id, list_id):
         analysis_results = []
         saved_tickets = []
         
+
+        
+
         for card in cards_data:
-            # Préparer les données de la carte pour l'analyse
+            # Vérifier si le ticket a déjà été analysé
+            existing_ticket = Tickets.get_by_trello_id(card['id'])
+            
+            if existing_ticket and existing_ticket.ticket_metadata:
+                # Récupérer le résultat d'analyse existant
+                analysis_result = existing_ticket.ticket_metadata.get('analysis_result', {})
+                if analysis_result:
+                    print(f"📌 Ticket {card['id']} déjà analysé, utilisation du résultat en cache")
+                    result = analysis_result
+                    analysis_results.append(result)
+                    
+                    # Marquer comme ticket existant pour les statistiques de sauvegarde
+                    if analyse_board_id:
+                        saved_tickets.append({
+                            'trello_ticket_id': card['id'],
+                            'card_name': card['name'],
+                            'criticality_level': existing_ticket.criticality_level,
+                            'from_cache': True
+                        })
+                    
+                    # Continuer avec le ticket suivant
+                    continue
+            
+            # Préparer les données de la carte pour l'analyse (nouveau ticket)
             card_data = {
                 'id': card['id'],
                 'name': card['name'],
@@ -115,12 +146,43 @@ def analyze_list_cards(board_id, list_id):
                 'members': card.get('members', []),
                 'url': card['url']
             }
-            
-            # Analyser la criticité
+
+            # Analyser la criticité (nouveau ticket seulement)
+            print(f"🔍 Analyse en cours pour le nouveau ticket {card['id']}...")
             result = analyzer.analyze_card_criticality(card_data)
             result['analyzed_at'] = datetime.now().isoformat()
             analysis_results.append(result)
-            
+
+
+
+            # Ajouter l'étiquette de criticité sur la carte Trello après analyse
+            try:
+                if result.get('success', False) and result.get('criticality_level'):
+                    logger.info(f"Ajout de l'étiquette '{result['criticality_level']}' sur la carte {card['id']} ({card['name']})")
+                    apply_criticality_label_with_creation(
+                        card_id=card['id'],
+                        board_id=board_id,
+                        token=token,
+                        criticality_level=result['criticality_level']
+                    )
+                    logger.info(f"Étiquette '{result['criticality_level']}' ajoutée avec succès sur la carte {card['id']}")
+            except Exception as label_error:
+                logger.error(f"Erreur lors de l'ajout de l'étiquette sur la carte {card['id']} : {str(label_error)}")
+
+            # Ajouter la justification comme commentaire sur la carte Trello
+            try:
+                justification = result.get('justification')
+                if result.get('success', False) and justification:
+                    logger.info(f"Ajout du commentaire (justification) sur la carte {card['id']} ({card['name']})")
+                    add_comment_to_card(
+                        card_id=card['id'],
+                        token=token,
+                        comment=justification
+                    )
+                    logger.info(f"Commentaire ajouté avec succès sur la carte {card['id']}")
+            except Exception as comment_error:
+                logger.error(f"Erreur lors de l'ajout du commentaire sur la carte {card['id']} : {str(comment_error)}")
+
             # Si analyse_board_id est fourni, sauvegarder dans la table tickets
             if analyse_board_id and result.get('success', False):
                 try:
@@ -140,14 +202,12 @@ def analyze_list_cards(board_id, list_id):
                             },
                             criticality_level=result.get('criticality_level', '').lower() if result.get('criticality_level') else None
                         )
-                        
                         db.session.add(ticket)
                         saved_tickets.append({
                             'trello_ticket_id': card['id'],
                             'card_name': card['name'],
                             'criticality_level': ticket.criticality_level
                         })
-                        
                 except Exception as ticket_error:
                     print(f"Erreur lors de la sauvegarde du ticket {card['id']}: {str(ticket_error)}")
         
@@ -201,27 +261,16 @@ def analyze_list_cards(board_id, list_id):
         return jsonify({"error": f"Erreur lors de l'analyse: {str(e)}"}), 500
 
 
-@trello_bp.route('/api/trello/cards/analyze', methods=['POST'])
-def analyze_cards_criticality():
+@trello_bp.route('/api/trello/card/<card_id>/add-label', methods=['POST'])
+def add_label_to_card(card_id):
     """
-    Analyse la criticité de plusieurs cards Trello.
+    Add a criticality label to a specific Trello card.
     
     Body JSON attendu:
     {
         "board_id": "string",
-        "board_name": "string", 
-        "cards": [
-            {
-                "id": "string",
-                "name": "string",
-                "desc": "string",
-                "due": "string|null",
-                "list_name": "string",
-                "labels": [...],
-                "members": [...],
-                "url": "string"
-            }
-        ]
+        "token": "string",
+        "criticality_level": "HIGH|MEDIUM|LOW"
     }
     """
     try:
@@ -231,59 +280,103 @@ def analyze_cards_criticality():
             return jsonify({"error": "Corps de requête JSON requis"}), 400
         
         board_id = data.get('board_id')
-        board_name = data.get('board_name', 'Board sans nom')
-        cards_data = data.get('cards', [])
+        token = data.get('token')
+        criticality_level = data.get('criticality_level')
         
-        if not board_id:
-            return jsonify({"error": "board_id requis"}), 400
+        # Validation des champs requis
+        required_fields = ['board_id', 'token', 'criticality_level']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"Champ {field} requis"}), 400
         
-        if not cards_data:
-            return jsonify({"error": "Liste de cards vide"}), 400
+        # Validation du niveau de criticité
+        if criticality_level.upper() not in ['HIGH', 'MEDIUM', 'LOW']:
+            return jsonify({"error": "criticality_level doit être HIGH, MEDIUM ou LOW"}), 400
         
-        # Initialiser l'analyseur de criticité
-        analyzer = CriticalityAnalyzer()
         
-        # Analyser chaque card
-        analysis_results = []
-        for card_data in cards_data:
-            # Ajouter les informations du board à chaque card
-            card_data['board_id'] = board_id
-            card_data['board_name'] = board_name
+        
+        # Appliquer le label sur la carte
+        try:
+            result = apply_criticality_label_with_creation(
+                card_id=card_id,
+                board_id=board_id,
+                token=token,
+                criticality_level=criticality_level.upper()
+            )
             
-            result = analyzer.analyze_card_criticality(card_data)
-            result['analyzed_at'] = datetime.now().isoformat()
-            analysis_results.append(result)
-        
-        # Calculer les statistiques du board
-        total_cards = len(analysis_results)
-        successful_analyses = [r for r in analysis_results if r.get('success', False)]
-        
-        criticality_counts = {
-            'CRITICAL_TOTAL': len(successful_analyses),  # Tous les tickets analysés sont critiques
-            'NON_CRITICAL': 0,  # Plus de tickets non-critiques
-            'HIGH': len([r for r in successful_analyses if r['criticality_level'] == 'HIGH']),
-            'MEDIUM': len([r for r in successful_analyses if r['criticality_level'] == 'MEDIUM']),
-            'LOW': len([r for r in successful_analyses if r['criticality_level'] == 'LOW'])
-        }
-        
-        success_rate = len(successful_analyses) / total_cards if total_cards > 0 else 0
-        
-        response = {
-            "board_analysis": {
-                "board_id": board_id,
-                "board_name": board_name,
-                "total_cards": total_cards,
-                "criticality_distribution": criticality_counts,
-                "success_rate": round(success_rate * 100, 2),
-                "analyzed_at": datetime.now().isoformat()
-            },
-            "cards_analysis": analysis_results
-        }
-        
-        return jsonify(response), 200
+            return jsonify({
+                "status": "success",
+                "message": f"Label de criticité '{criticality_level.upper()}' ajouté à la carte {card_id}",
+                "card_id": card_id,
+                "criticality_level": criticality_level.upper(),
+                "trello_response": result
+            }), 200
+            
+        except Exception as label_error:
+            return jsonify({
+                "status": "error",
+                "message": f"Erreur lors de l'ajout du label: {str(label_error)}"
+            }), 500
         
     except Exception as e:
-        return jsonify({"error": f"Erreur lors de l'analyse: {str(e)}"}), 500
+        return jsonify({"error": f"Erreur lors du traitement: {str(e)}"}), 500
+
+
+@trello_bp.route('/api/trello/card/<card_id>/add-comment', methods=['POST'])
+def add_comment_to_card_endpoint(card_id):
+    """
+    Add a comment to a specific Trello card.
+    
+    Body JSON attendu:
+    {
+        "token": "string",
+        "comment": "string"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Corps de requête JSON requis"}), 400
+        
+        token = data.get('token')
+        comment = data.get('comment')
+        
+        # Validation des champs requis
+        required_fields = ['token', 'comment']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"Champ {field} requis"}), 400
+        
+        
+        
+        # Ajouter le commentaire à la carte
+        try:
+            result = add_comment_to_card(
+                card_id=card_id,
+                token=token,
+                comment=comment
+            )
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Commentaire ajouté à la carte {card_id}",
+                "card_id": card_id,
+                "comment": comment,
+                "trello_response": result
+            }), 200
+            
+        except Exception as comment_error:
+            return jsonify({
+                "status": "error",
+                "message": f"Erreur lors de l'ajout du commentaire: {str(comment_error)}"
+            }), 500
+        
+    except Exception as e:
+        return jsonify({"error": f"Erreur lors du traitement: {str(e)}"}), 500
+
+
+
 
 
 @trello_bp.route('/api/trello/card/<card_id>/analyze', methods=['POST'])
@@ -709,4 +802,114 @@ def get_tickets():
         return jsonify({
             "status": "error",
             "message": f"Erreur serveur: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/analysis/cache/clear', methods=['POST'])
+def clear_analysis_cache():
+    """
+    Supprime le cache d'analyse pour forcer une réanalyse de tous les tickets.
+    
+    Body JSON attendu (optionnel):
+    {
+        "trello_ticket_id": "string" (optionnel - pour supprimer le cache d'un ticket spécifique)
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        trello_ticket_id = data.get('trello_ticket_id')
+        
+        if trello_ticket_id:
+            # Supprimer le cache pour un ticket spécifique
+            success = Tickets.invalidate_analysis_cache(trello_ticket_id)
+            if success:
+                return jsonify({
+                    "status": "success",
+                    "message": f"Cache d'analyse supprimé pour le ticket {trello_ticket_id}",
+                    "cleared_tickets": 1
+                }), 200
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Ticket {trello_ticket_id} introuvable ou sans cache"
+                }), 404
+        else:
+            # Supprimer le cache pour tous les tickets
+            cleared_count = Tickets.clear_all_analysis_cache()
+            return jsonify({
+                "status": "success",
+                "message": f"Cache d'analyse supprimé pour {cleared_count} tickets",
+                "cleared_tickets": cleared_count
+            }), 200
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la suppression du cache: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/analysis/cache/status', methods=['GET'])
+def get_cache_status():
+    """
+    Récupère les statistiques du cache d'analyse.
+    """
+    try:
+        total_tickets = Tickets.query.count()
+        
+        # Compter les tickets avec cache d'analyse
+        cached_tickets = 0
+        uncached_tickets = 0
+        
+        tickets = Tickets.query.all()
+        for ticket in tickets:
+            if ticket.ticket_metadata and ticket.ticket_metadata.get('analysis_result'):
+                cached_tickets += 1
+            else:
+                uncached_tickets += 1
+        
+        cache_ratio = (cached_tickets / total_tickets * 100) if total_tickets > 0 else 0
+        
+        return jsonify({
+            "status": "success",
+            "cache_stats": {
+                "total_tickets": total_tickets,
+                "cached_tickets": cached_tickets,
+                "uncached_tickets": uncached_tickets,
+                "cache_ratio_percent": round(cache_ratio, 2)
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la récupération des statistiques: {str(e)}"
+        }), 500
+
+
+@trello_bp.route('/api/tickets/<trello_ticket_id>/analysis', methods=['GET'])
+def get_ticket_analysis(trello_ticket_id):
+    """
+    Récupère le résultat d'analyse en cache pour un ticket spécifique.
+    """
+    try:
+        cached_result = Tickets.get_cached_analysis(trello_ticket_id)
+        
+        if cached_result:
+            return jsonify({
+                "status": "success",
+                "trello_ticket_id": trello_ticket_id,
+                "analysis_result": cached_result,
+                "from_cache": True
+            }), 200
+        else:
+            return jsonify({
+                "status": "not_found",
+                "message": f"Aucune analyse en cache pour le ticket {trello_ticket_id}"
+            }), 404
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la récupération de l'analyse: {str(e)}"
         }), 500
