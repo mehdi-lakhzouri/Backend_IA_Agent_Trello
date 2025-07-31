@@ -13,6 +13,7 @@ from sqlalchemy import func
 import requests
 from tools.add_comment_tool import add_comment_to_card
 import traceback
+from tools.move_card_tool import move_card_to_list
 import html
 import re
 from tools.add_etiquette_tool import apply_criticality_label_with_creation
@@ -110,27 +111,26 @@ def analyze_list_cards(board_id, list_id):
         
 
         for card in cards_data:
-            # Vérifier si le ticket a déjà été analysé
-            existing_ticket = Tickets.get_by_trello_id(card['id'])
-            
+            existing_ticket = Tickets.get_by_ticket_id(card['id'])
             if existing_ticket and existing_ticket.ticket_metadata:
-                # Récupérer le résultat d'analyse existant
-                analysis_result = existing_ticket.ticket_metadata.get('analysis_result', {})
-                if analysis_result:
+                # Recherche d'une analyse précédente dans l'historique
+                from app.models.trello_models import TicketAnalysisHistory
+                last_analysis = TicketAnalysisHistory.query.filter_by(ticket_id=existing_ticket.id_ticket).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
+                if last_analysis:
                     print(f"📌 Ticket {card['id']} déjà analysé, utilisation du résultat en cache")
-                    result = analysis_result
+                    result = {
+                        'success': True,
+                        'criticality_level': last_analysis.criticality_level,
+                        'justification': last_analysis.analyse_justification.get('justification') if last_analysis.analyse_justification else None,
+                        'analyzed_at': last_analysis.analyzed_at.isoformat() if last_analysis.analyzed_at else None
+                    }
                     analysis_results.append(result)
-                    
-                    # Marquer comme ticket existant pour les statistiques de sauvegarde
                     if analyse_board_id:
                         saved_tickets.append({
-                            'trello_ticket_id': card['id'],
+                            'ticket_id': card['id'],
                             'card_name': card['name'],
-                            'criticality_level': existing_ticket.criticality_level,
                             'from_cache': True
                         })
-                    
-                    # Continuer avec le ticket suivant
                     continue
             
             # Préparer les données de la carte pour l'analyse (nouveau ticket)
@@ -183,31 +183,43 @@ def analyze_list_cards(board_id, list_id):
             except Exception as comment_error:
                 logger.error(f"Erreur lors de l'ajout du commentaire sur la carte {card['id']} : {str(comment_error)}")
 
-            # Si analyse_board_id est fourni, sauvegarder dans la table tickets
+            # Si analyse_board_id est fourni, sauvegarder dans la table tickets et dans l'historique
             if analyse_board_id and result.get('success', False):
                 try:
+                    from app.models.trello_models import TicketAnalysisHistory, AnalyseBoard
+                    analyse_board = AnalyseBoard.query.get(analyse_board_id)
+                    analyse_id = analyse_board.analyse_id if analyse_board else None
                     # Vérifier si le ticket existe déjà
-                    if not Tickets.exists_by_trello_id(card['id']):
+                    if not Tickets.exists_by_ticket_id(card['id']):
                         ticket = Tickets(
                             analyse_board_id=analyse_board_id,
-                            trello_ticket_id=card['id'],
+                            ticket_id=card['id'],
                             ticket_metadata={
                                 'name': card['name'],
                                 'desc': card.get('desc', ''),
                                 'due': card.get('due'),
                                 'url': card['url'],
                                 'labels': card.get('labels', []),
-                                'members': card.get('members', []),
-                                'analysis_result': result
-                            },
-                            criticality_level=result.get('criticality_level', '').lower() if result.get('criticality_level') else None
+                                'members': card.get('members', [])
+                            }
                         )
                         db.session.add(ticket)
-                        saved_tickets.append({
-                            'trello_ticket_id': card['id'],
-                            'card_name': card['name'],
-                            'criticality_level': ticket.criticality_level
-                        })
+                        db.session.flush()  # Pour obtenir ticket.id_ticket
+                    else:
+                        ticket = Tickets.get_by_ticket_id(card['id'])
+                    # Enregistrer l'analyse dans l'historique
+                    history = TicketAnalysisHistory(
+                        ticket_id=ticket.id_ticket,
+                        analyse_id=analyse_id,
+                        analyse_justification={'justification': result.get('justification')},
+                        criticality_level=result.get('criticality_level'),
+                        analyzed_at=datetime.now()
+                    )
+                    db.session.add(history)
+                    saved_tickets.append({
+                        'ticket_id': card['id'],
+                        'card_name': card['name']
+                    })
                 except Exception as ticket_error:
                     print(f"Erreur lors de la sauvegarde du ticket {card['id']}: {str(ticket_error)}")
         
@@ -754,26 +766,28 @@ def get_tickets():
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
         tickets_data = []
+        from app.models.trello_models import TicketAnalysisHistory
         for ticket in pagination.items:
             meta = ticket.ticket_metadata or {}
-            analysis_result = meta.get('analysis_result', {})
-
-            # Nettoyage lisible du champ justification
-            raw_justification = analysis_result.get('justification', '')
-            try:
-                justification = html.unescape(raw_justification).replace('\r', '').strip()
-                justification = re.sub(r'\n{2,}', '\n', justification)
-            except Exception:
-                justification = raw_justification
+            # Récupérer la dernière analyse pour ce ticket
+            last_analysis = TicketAnalysisHistory.query.filter_by(ticket_id=ticket.id_ticket).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
+            if last_analysis:
+                justification = last_analysis.analyse_justification.get('justification') if last_analysis.analyse_justification else ''
+                analyzed_at = last_analysis.analyzed_at.isoformat() if last_analysis.analyzed_at else None
+                criticality_level = last_analysis.criticality_level.upper() if last_analysis.criticality_level else None
+            else:
+                justification = ''
+                analyzed_at = None
+                criticality_level = None
 
             tickets_data.append({
                 "name": meta.get('name'),
                 "desc": meta.get('desc'),
                 "due": meta.get('due'),
                 "url": meta.get('url'),
-                "criticality_level": ticket.criticality_level.upper() if ticket.criticality_level else None,
+                "criticality_level": criticality_level,
                 "justification": justification,
-                "analyzed_at": analysis_result.get('analyzed_at')
+                "analyzed_at": analyzed_at
             })
 
         return jsonify({
@@ -812,26 +826,26 @@ def clear_analysis_cache():
     
     Body JSON attendu (optionnel):
     {
-        "trello_ticket_id": "string" (optionnel - pour supprimer le cache d'un ticket spécifique)
+        "ticket_id": "string" (optionnel - pour supprimer le cache d'un ticket spécifique)
     }
     """
     try:
         data = request.get_json() or {}
-        trello_ticket_id = data.get('trello_ticket_id')
+        ticket_id = data.get('ticket_id')
         
-        if trello_ticket_id:
+        if ticket_id:
             # Supprimer le cache pour un ticket spécifique
-            success = Tickets.invalidate_analysis_cache(trello_ticket_id)
+            success = Tickets.invalidate_analysis_cache(ticket_id)
             if success:
                 return jsonify({
                     "status": "success",
-                    "message": f"Cache d'analyse supprimé pour le ticket {trello_ticket_id}",
+                    "message": f"Cache d'analyse supprimé pour le ticket {ticket_id}",
                     "cleared_tickets": 1
                 }), 200
             else:
                 return jsonify({
                     "status": "error",
-                    "message": f"Ticket {trello_ticket_id} introuvable ou sans cache"
+                    "message": f"Ticket {ticket_id} introuvable ou sans cache"
                 }), 404
         else:
             # Supprimer le cache pour tous les tickets
@@ -887,25 +901,25 @@ def get_cache_status():
         }), 500
 
 
-@trello_bp.route('/api/tickets/<trello_ticket_id>/analysis', methods=['GET'])
-def get_ticket_analysis(trello_ticket_id):
+@trello_bp.route('/api/tickets/<ticket_id>/analysis', methods=['GET'])
+def get_ticket_analysis(ticket_id):
     """
     Récupère le résultat d'analyse en cache pour un ticket spécifique.
     """
     try:
-        cached_result = Tickets.get_cached_analysis(trello_ticket_id)
+        cached_result = Tickets.get_cached_analysis(ticket_id)
         
         if cached_result:
             return jsonify({
                 "status": "success",
-                "trello_ticket_id": trello_ticket_id,
+                "ticket_id": ticket_id,
                 "analysis_result": cached_result,
                 "from_cache": True
             }), 200
         else:
             return jsonify({
                 "status": "not_found",
-                "message": f"Aucune analyse en cache pour le ticket {trello_ticket_id}"
+                "message": f"Aucune analyse en cache pour le ticket {ticket_id}"
             }), 404
             
     except Exception as e:
@@ -913,3 +927,85 @@ def get_ticket_analysis(trello_ticket_id):
             "status": "error",
             "message": f"Erreur lors de la récupération de l'analyse: {str(e)}"
         }), 500
+
+@trello_bp.route('/api/trello/card/<card_id>/move', methods=['PUT'])
+def move_card(card_id):
+    """
+    Déplace une carte Trello vers une autre liste.
+    
+    Body JSON attendu :
+    {
+        "token": "string",
+        "new_list_id": "string"
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Corps de requête JSON requis"}), 400
+        token = data.get('token')
+        new_list_id = data.get('new_list_id')
+        if not token or not new_list_id:
+            return jsonify({"error": "token et new_list_id sont requis"}), 400
+        result = move_card_to_list(card_id, new_list_id, token)
+        return jsonify({"status": "success", "result": result}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+
+
+@trello_bp.route('/api/tickets/<ticket_id>/reanalyze', methods=['POST'])
+def reanalyze_ticket(ticket_id):
+    """
+    Réanalyse un ticket précis, enregistre le résultat dans ticket_analysis_history et retourne le nouveau résultat.
+    """
+    try:
+        from app.models.trello_models import Tickets, TicketAnalysisHistory, AnalyseBoard
+        from app.services.criticality_analyzer import CriticalityAnalyzer
+        ticket = Tickets.get_by_ticket_id(ticket_id)
+        if not ticket:
+            return jsonify({"status": "error", "message": f"Ticket {ticket_id} introuvable"}), 404
+
+        meta = ticket.ticket_metadata or {}
+        # Préparer les données pour l'analyse
+        card_data = {
+            'id': ticket.ticket_id,
+            'name': meta.get('name'),
+            'desc': meta.get('desc', ''),
+            'due': meta.get('due'),
+            'list_name': meta.get('list_name'),
+            'board_id': meta.get('board_id'),
+            'board_name': meta.get('board_name'),
+            'labels': meta.get('labels', []),
+            'members': meta.get('members', []),
+            'url': meta.get('url')
+        }
+        analyzer = CriticalityAnalyzer()
+        result = analyzer.analyze_card_criticality(card_data)
+        result['analyzed_at'] = datetime.now().isoformat()
+
+        # Récupérer analyse_id via analyse_board
+        analyse_board = AnalyseBoard.query.get(ticket.analyse_board_id)
+        analyse_id = analyse_board.analyse_id if analyse_board else None
+
+        # Enregistrer dans l'historique
+        history = TicketAnalysisHistory(
+            ticket_id=ticket.id_ticket,
+            analyse_id=analyse_id,
+            analyse_justification={'justification': result.get('justification')},
+            criticality_level=result.get('criticality_level'),
+            analyzed_at=datetime.now()
+        )
+        db.session.add(history)
+        db.session.commit()
+
+        return jsonify({
+            "status": "success",
+            "ticket_id": ticket_id,
+            "analysis_result": result
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"Erreur lors de la réanalyse: {str(e)}"}), 500
+
+    

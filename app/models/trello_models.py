@@ -261,24 +261,59 @@ class AnalyseBoard(db.Model):
         base_dict.update(board_info)
         return base_dict
 
+class TicketAnalysisHistory(db.Model):
+    __tablename__ = 'ticket_analysis_history'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id_ticket'), nullable=False)
+    analyse_id = db.Column(db.Integer, db.ForeignKey('analyse.analyse_id'), nullable=False)
+    analyse_justification = db.Column(db.JSON, nullable=True)
+    criticality_level = db.Column(db.Enum('low', 'medium', 'high', name='criticality_level_enum'), nullable=True)
+    analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relations avec les tables tickets et analyse
+    ticket = db.relationship('Tickets', backref=db.backref('analysis_history', lazy=True))
+    analyse = db.relationship('Analyse', backref=db.backref('ticket_analysis_history', lazy=True))
+
+    def __init__(self, ticket_id, analyse_id, analyse_justification=None, criticality_level=None, analyzed_at=None):
+        self.ticket_id = ticket_id
+        self.analyse_id = analyse_id
+        self.analyse_justification = analyse_justification
+        self.criticality_level = criticality_level
+        self.analyzed_at = analyzed_at or datetime.utcnow()
+
+    def __repr__(self):
+        return f'<TicketAnalysisHistory {self.id}: Ticket {self.ticket_id}>'
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'ticket_id': self.ticket_id,
+            'analyse_id': self.analyse_id,
+            'analyse_justification': self.analyse_justification,
+            'criticality_level': self.criticality_level,
+            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None
+        }
+
+    def to_json(self):
+        import json
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+
 class Tickets(db.Model):
     __tablename__ = 'tickets'
     id_ticket = db.Column(db.Integer, primary_key=True, autoincrement=True)
     analyse_board_id = db.Column(db.Integer, db.ForeignKey('analyse_board.id'), nullable=False)
-    trello_ticket_id = db.Column(db.String(255), unique=True, nullable=True)
+    ticket_id = db.Column(db.String(255), unique=True, nullable=True)
     ticket_metadata = db.Column(db.JSON, nullable=True)
-    criticality_level = db.Column(db.Enum('low', 'medium', 'high', name='criticality_level_enum'), nullable=True)
     createdAt = db.Column(db.DateTime, default=datetime.utcnow)
     updatedAt = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
    
     # Relation avec la table analyse_board
     analyse_board = db.relationship('AnalyseBoard', backref=db.backref('tickets', lazy=True))
 
-    def __init__(self, analyse_board_id, ticket_metadata=None, criticality_level=None, trello_ticket_id=None, createdAt=None):
+    def __init__(self, analyse_board_id, ticket_metadata=None, ticket_id=None, createdAt=None):
         self.analyse_board_id = analyse_board_id
         self.ticket_metadata = ticket_metadata
-        self.criticality_level = criticality_level
-        self.trello_ticket_id = trello_ticket_id
+        self.ticket_id = ticket_id
         self.createdAt = createdAt or datetime.utcnow()
         self.updatedAt = datetime.utcnow()
 
@@ -290,9 +325,8 @@ class Tickets(db.Model):
         return {
             'id_ticket': self.id_ticket,
             'analyse_board_id': self.analyse_board_id,
-            'trello_ticket_id': self.trello_ticket_id,
+            'ticket_id': self.ticket_id,
             'ticket_metadata': self.ticket_metadata,
-            'criticality_level': self.criticality_level,
             'createdAt': self.createdAt.isoformat() if self.createdAt else None,
             'updatedAt': self.updatedAt.isoformat() if self.updatedAt else None
         }
@@ -303,35 +337,35 @@ class Tickets(db.Model):
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
     @classmethod
-    def get_by_trello_id(cls, trello_ticket_id):
-        """Récupère un ticket par son ID Trello."""
-        return cls.query.filter_by(trello_ticket_id=trello_ticket_id).first()
+    def get_by_ticket_id(cls, ticket_id):
+        """Récupère un ticket par son ID externe (ex-Trello)."""
+        return cls.query.filter_by(ticket_id=ticket_id).first()
 
     @classmethod
-    def exists_by_trello_id(cls, trello_ticket_id):
-        """Vérifie si un ticket avec cet ID Trello existe déjà."""
-        return cls.query.filter_by(trello_ticket_id=trello_ticket_id).first() is not None
-    
+    def exists_by_ticket_id(cls, ticket_id):
+        """Vérifie si un ticket avec cet ID externe existe déjà."""
+        return cls.query.filter_by(ticket_id=ticket_id).first() is not None
+
     @classmethod
-    def has_valid_analysis(cls, trello_ticket_id):
+    def has_valid_analysis(cls, ticket_id):
         """Vérifie si un ticket a une analyse valide en cache."""
-        ticket = cls.get_by_trello_id(trello_ticket_id)
+        ticket = cls.get_by_ticket_id(ticket_id)
         if not ticket or not ticket.ticket_metadata:
             return False
         return ticket.ticket_metadata.get('analysis_result') is not None
-    
+
     @classmethod
-    def get_cached_analysis(cls, trello_ticket_id):
+    def get_cached_analysis(cls, ticket_id):
         """Récupère le résultat d'analyse en cache pour un ticket."""
-        ticket = cls.get_by_trello_id(trello_ticket_id)
+        ticket = cls.get_by_ticket_id(ticket_id)
         if ticket and ticket.ticket_metadata:
             return ticket.ticket_metadata.get('analysis_result')
         return None
-    
+
     @classmethod
-    def invalidate_analysis_cache(cls, trello_ticket_id):
+    def invalidate_analysis_cache(cls, ticket_id):
         """Supprime le cache d'analyse pour forcer une réanalyse."""
-        ticket = cls.get_by_trello_id(trello_ticket_id)
+        ticket = cls.get_by_ticket_id(ticket_id)
         if ticket and ticket.ticket_metadata:
             # Supprimer le résultat d'analyse du metadata
             metadata = ticket.ticket_metadata.copy()
@@ -340,7 +374,7 @@ class Tickets(db.Model):
             db.session.commit()
             return True
         return False
-    
+
     @classmethod
     def clear_all_analysis_cache(cls):
         """Supprime tous les caches d'analyse pour forcer une réanalyse complète."""
