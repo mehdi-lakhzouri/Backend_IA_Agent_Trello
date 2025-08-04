@@ -269,17 +269,19 @@ class TicketAnalysisHistory(db.Model):
     analyse_justification = db.Column(db.JSON, nullable=True)
     criticality_level = db.Column(db.Enum('low', 'medium', 'high', name='criticality_level_enum'), nullable=True)
     analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reanalyse = db.Column(db.Boolean, default=False)
 
     # Relations avec les tables tickets et analyse
     ticket = db.relationship('Tickets', backref=db.backref('analysis_history', lazy=True))
     analyse = db.relationship('Analyse', backref=db.backref('ticket_analysis_history', lazy=True))
 
-    def __init__(self, ticket_id, analyse_id, analyse_justification=None, criticality_level=None, analyzed_at=None):
+    def __init__(self, ticket_id, analyse_id, analyse_justification=None, criticality_level=None, analyzed_at=None, reanalyse=False):
         self.ticket_id = ticket_id
         self.analyse_id = analyse_id
         self.analyse_justification = analyse_justification
         self.criticality_level = criticality_level
         self.analyzed_at = analyzed_at or datetime.utcnow()
+        self.reanalyse = reanalyse
 
     def __repr__(self):
         return f'<TicketAnalysisHistory {self.id}: Ticket {self.ticket_id}>'
@@ -291,7 +293,8 @@ class TicketAnalysisHistory(db.Model):
             'analyse_id': self.analyse_id,
             'analyse_justification': self.analyse_justification,
             'criticality_level': self.criticality_level,
-            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None
+            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None,
+            'reanalyse': self.reanalyse
         }
 
     def to_json(self):
@@ -304,16 +307,18 @@ class Tickets(db.Model):
     analyse_board_id = db.Column(db.Integer, db.ForeignKey('analyse_board.id'), nullable=False)
     ticket_id = db.Column(db.String(255), unique=True, nullable=True)
     ticket_metadata = db.Column(db.JSON, nullable=True)
+    board_name = db.Column(db.String(255), nullable=True)
     createdAt = db.Column(db.DateTime, default=datetime.utcnow)
     updatedAt = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
    
     # Relation avec la table analyse_board
     analyse_board = db.relationship('AnalyseBoard', backref=db.backref('tickets', lazy=True))
 
-    def __init__(self, analyse_board_id, ticket_metadata=None, ticket_id=None, createdAt=None):
+    def __init__(self, analyse_board_id, ticket_metadata=None, ticket_id=None, board_name=None, createdAt=None):
         self.analyse_board_id = analyse_board_id
         self.ticket_metadata = ticket_metadata
         self.ticket_id = ticket_id
+        self.board_name = board_name
         self.createdAt = createdAt or datetime.utcnow()
         self.updatedAt = datetime.utcnow()
 
@@ -327,6 +332,7 @@ class Tickets(db.Model):
             'analyse_board_id': self.analyse_board_id,
             'ticket_id': self.ticket_id,
             'ticket_metadata': self.ticket_metadata,
+            'board_name': self.board_name,
             'createdAt': self.createdAt.isoformat() if self.createdAt else None,
             'updatedAt': self.updatedAt.isoformat() if self.updatedAt else None
         }

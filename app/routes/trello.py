@@ -183,6 +183,37 @@ def analyze_list_cards(board_id, list_id):
             except Exception as comment_error:
                 logger.error(f"Erreur lors de l'ajout du commentaire sur la carte {card['id']} : {str(comment_error)}")
 
+            # Déplacer la carte vers la liste cible si configurée
+            try:
+                if result.get('success', False):
+                    # Récupérer la configuration avec targetListId
+                    config = Config.get_latest_config()
+                    if config and config.config_data:
+                        target_list_id = config.config_data.get('targetListId')
+                        target_list_name = config.config_data.get('targetListName', 'Liste cible')
+                        
+                        if target_list_id:
+                            logger.info(f"Déplacement de la carte {card['id']} vers la liste '{target_list_name}' ({target_list_id})")
+                            move_result = move_card_to_list(
+                                card_id=card['id'],
+                                new_list_id=target_list_id,
+                                token=token
+                            )
+                            logger.info(f"Carte {card['id']} déplacée avec succès vers la liste '{target_list_name}'")
+                            
+                            # Ajouter l'info du déplacement au résultat
+                            result['card_moved'] = True
+                            result['target_list_id'] = target_list_id
+                            result['target_list_name'] = target_list_name
+                        else:
+                            logger.warning(f"Aucune liste cible (targetListId) configurée pour le déplacement")
+                            result['card_moved'] = False
+                            result['move_error'] = "Aucune liste cible configurée"
+            except Exception as move_error:
+                logger.error(f"Erreur lors du déplacement de la carte {card['id']} : {str(move_error)}")
+                result['card_moved'] = False
+                result['move_error'] = str(move_error)
+
             # Si analyse_board_id est fourni, sauvegarder dans la table tickets et dans l'historique
             if analyse_board_id and result.get('success', False):
                 try:
@@ -194,13 +225,18 @@ def analyze_list_cards(board_id, list_id):
                         ticket = Tickets(
                             analyse_board_id=analyse_board_id,
                             ticket_id=card['id'],
+                            board_name=board_name,  # Ajouter le nom du board pour la traçabilité
                             ticket_metadata={
                                 'name': card['name'],
                                 'desc': card.get('desc', ''),
                                 'due': card.get('due'),
                                 'url': card['url'],
                                 'labels': card.get('labels', []),
-                                'members': card.get('members', [])
+                                'members': card.get('members', []),
+                                'board_id': board_id,
+                                'board_name': board_name,
+                                'list_id': list_id,
+                                'list_name': list_name
                             }
                         )
                         db.session.add(ticket)
@@ -213,7 +249,8 @@ def analyze_list_cards(board_id, list_id):
                         analyse_id=analyse_id,
                         analyse_justification={'justification': result.get('justification')},
                         criticality_level=result.get('criticality_level'),
-                        analyzed_at=datetime.now()
+                        analyzed_at=datetime.now(),
+                        reanalyse=False  # Analyse initiale, pas une réanalyse
                     )
                     db.session.add(history)
                     saved_tickets.append({
@@ -506,6 +543,65 @@ def config_board_subscription():
         }), 500
 
 
+@trello_bp.route('/api/trello/config-board-subscription', methods=['PUT'])
+def update_board_subscription():
+    """
+    Met à jour une configuration d'abonnement aux boards Trello existante.
+    Attend: id, et les champs à mettre à jour (ex: targetListId, targetListName)
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "Corps de requête JSON requis"
+            }), 400
+        
+        config_id = data.get('id')
+        if not config_id:
+            return jsonify({
+                "status": "error",
+                "message": "ID de configuration requis"
+            }), 400
+        
+        # Récupérer la configuration existante
+        config = Config.query.get(config_id)
+        if not config:
+            return jsonify({
+                "status": "error",
+                "message": f"Configuration avec l'ID {config_id} introuvable"
+            }), 404
+        
+        # Mettre à jour les données de configuration
+        updated_config_data = config.config_data.copy()
+        
+        # Champs autorisés à la mise à jour
+        allowed_fields = ['targetListId', 'targetListName', 'token', 'boardName', 'listName']
+        for field in allowed_fields:
+            if field in data:
+                updated_config_data[field] = data[field]
+        
+        config.config_data = updated_config_data
+        config.updatedAt = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Configuration mise à jour avec succès",
+            "data": updated_config_data,
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la mise à jour: {str(e)}"
+        }), 500
+
+
 @trello_bp.route('/api/trello/config-board-subscription', methods=['GET'])
 def get_board_subscriptions():
     """
@@ -781,13 +877,17 @@ def get_tickets():
                 criticality_level = None
 
             tickets_data.append({
+                "ticket_id": ticket.ticket_id,
+                "id_ticket": ticket.id_ticket,
                 "name": meta.get('name'),
                 "desc": meta.get('desc'),
                 "due": meta.get('due'),
                 "url": meta.get('url'),
+                "board_name": ticket.board_name,  # Ajouter le nom du board
                 "criticality_level": criticality_level,
                 "justification": justification,
-                "analyzed_at": analyzed_at
+                "analyzed_at": analyzed_at,
+                "is_reanalyse": last_analysis.reanalyse if last_analysis else False  # Flag reanalyse
             })
 
         return jsonify({
@@ -994,9 +1094,18 @@ def reanalyze_ticket(ticket_id):
             analyse_id=analyse_id,
             analyse_justification={'justification': result.get('justification')},
             criticality_level=result.get('criticality_level'),
-            analyzed_at=datetime.now()
+            analyzed_at=datetime.now(),
+            reanalyse=True  # Flag pour indiquer qu'il s'agit d'une réanalyse
         )
         db.session.add(history)
+        
+        # Mettre à jour le cache d'analyse dans ticket_metadata
+        if ticket.ticket_metadata:
+            ticket.ticket_metadata['analysis_result'] = result
+        else:
+            ticket.ticket_metadata = {'analysis_result': result}
+        db.session.add(ticket)
+        
         db.session.commit()
 
         return jsonify({
@@ -1007,5 +1116,162 @@ def reanalyze_ticket(ticket_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"status": "error", "message": f"Erreur lors de la réanalyse: {str(e)}"}), 500
+
+
+@trello_bp.route('/api/tickets/<ticket_id>/analysis/history', methods=['GET'])
+def get_ticket_analysis_history(ticket_id):
+    """
+    Retourne l'historique complet des analyses pour un ticket.
+    """
+    try:
+        from app.models.trello_models import Tickets, TicketAnalysisHistory
+        ticket = Tickets.get_by_ticket_id(ticket_id)
+        if not ticket:
+            return jsonify({"status": "error", "message": f"Ticket {ticket_id} introuvable"}), 404
+
+        history_entries = TicketAnalysisHistory.query.filter_by(ticket_id=ticket.id_ticket)\
+            .order_by(TicketAnalysisHistory.analyzed_at.desc()).all()
+
+        history_list = []
+        for entry in history_entries:
+            history_list.append({
+                "analysis_id": entry.id,
+                "analyse_id": entry.analyse_id,
+                "justification": entry.analyse_justification.get('justification') if entry.analyse_justification else '',
+                "criticality_level": entry.criticality_level,
+                "analyzed_at": entry.analyzed_at.isoformat() if entry.analyzed_at else None,
+                "reanalyse": entry.reanalyse
+            })
+
+        return jsonify({
+            "status": "success",
+            "ticket_id": ticket_id,
+            "board_name": ticket.board_name,
+            "history": history_list,
+            "total": len(history_list)
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Erreur lors de la récupération de l'historique: {str(e)}"}), 500
+
+
+@trello_bp.route('/api/analysis/statistics', methods=['GET'])
+def get_analysis_statistics():
+    """
+    Retourne des statistiques sur les analyses et réanalyses.
+    """
+    try:
+        from app.models.trello_models import TicketAnalysisHistory, Tickets
+        
+        # Statistiques générales
+        total_analyses = TicketAnalysisHistory.query.count()
+        total_reanalyses = TicketAnalysisHistory.query.filter_by(reanalyse=True).count()
+        total_initial_analyses = total_analyses - total_reanalyses
+        total_tickets = Tickets.query.count()
+        
+        # Répartition par niveau de criticité
+        criticality_stats = {
+            'high': TicketAnalysisHistory.query.filter_by(criticality_level='high').count(),
+            'medium': TicketAnalysisHistory.query.filter_by(criticality_level='medium').count(),
+            'low': TicketAnalysisHistory.query.filter_by(criticality_level='low').count()
+        }
+        
+        # Statistiques par board
+        board_stats = db.session.query(
+            Tickets.board_name,
+            func.count(TicketAnalysisHistory.id).label('total_analyses'),
+            func.count(
+                db.session.query().filter(TicketAnalysisHistory.reanalyse == True).as_scalar()
+            ).label('reanalyses')
+        ).join(TicketAnalysisHistory, Tickets.id_ticket == TicketAnalysisHistory.ticket_id)\
+         .group_by(Tickets.board_name).all()
+        
+        board_list = []
+        for board_name, total, reanalyses in board_stats:
+            board_list.append({
+                'board_name': board_name,
+                'total_analyses': total,
+                'reanalyses': reanalyses,
+                'initial_analyses': total - reanalyses
+            })
+        
+        return jsonify({
+            "status": "success",
+            "statistics": {
+                "total_tickets": total_tickets,
+                "total_analyses": total_analyses,
+                "initial_analyses": total_initial_analyses,
+                "reanalyses": total_reanalyses,
+                "reanalysis_rate": round((total_reanalyses / total_analyses * 100), 2) if total_analyses > 0 else 0,
+                "criticality_distribution": criticality_stats,
+                "by_board": board_list
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Erreur lors de la récupération des statistiques: {str(e)}"}), 500
+
+
+@trello_bp.route('/api/trello/config-board-subscription/<int:config_id>/target-list', methods=['POST'])
+def set_target_list(config_id):
+    """
+    Définit la liste cible pour le déplacement automatique des cartes après analyse.
+    
+    Body JSON attendu:
+    {
+        "targetListId": "string",
+        "targetListName": "string"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "Corps de requête JSON requis"
+            }), 400
+        
+        target_list_id = data.get('targetListId')
+        target_list_name = data.get('targetListName', 'Liste cible')
+        
+        if not target_list_id:
+            return jsonify({
+                "status": "error",
+                "message": "targetListId requis"
+            }), 400
+        
+        # Récupérer la configuration
+        config = Config.query.get(config_id)
+        if not config:
+            return jsonify({
+                "status": "error",
+                "message": f"Configuration avec l'ID {config_id} introuvable"
+            }), 404
+        
+        # Mettre à jour avec la liste cible
+        config_data = config.config_data.copy()
+        config_data['targetListId'] = target_list_id
+        config_data['targetListName'] = target_list_name
+        
+        config.config_data = config_data
+        config.updatedAt = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Liste cible '{target_list_name}' configurée avec succès",
+            "data": {
+                "config_id": config_id,
+                "targetListId": target_list_id,
+                "targetListName": target_list_name
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur lors de la configuration: {str(e)}"
+        }), 500
 
     
