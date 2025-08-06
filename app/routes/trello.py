@@ -709,13 +709,12 @@ def get_analyses():
         order_by = order_by if order_by in {'createdAt', 'tickets_count'} else 'createdAt'
         order_direction = order_direction if order_direction in {'asc', 'desc'} else 'desc'
 
-        # Base query - always join with AnalyseBoard and Tickets to count tickets
+        # Base query - utiliser ticket_analysis_history pour compter les tickets par analyse
         query = db.session.query(
             Analyse,
-            func.count(Tickets.id_ticket).label('tickets_count')
+            func.count(TicketAnalysisHistory.id).label('tickets_count')
         ).select_from(Analyse) \
-         .outerjoin(AnalyseBoard, AnalyseBoard.analyse_id == Analyse.analyse_id) \
-         .outerjoin(Tickets, Tickets.analyse_board_id == AnalyseBoard.id) \
+         .outerjoin(TicketAnalysisHistory, TicketAnalysisHistory.analyse_id == Analyse.analyse_id) \
          .group_by(Analyse.analyse_id)
 
         applied_filters = []
@@ -746,15 +745,15 @@ def get_analyses():
                     value = int(value)
 
                     if operator == 'gt':
-                        query = query.having(func.count(Tickets.id_ticket) > value)
+                        query = query.having(func.count(TicketAnalysisHistory.id) > value)
                     elif operator == 'gte':
-                        query = query.having(func.count(Tickets.id_ticket) >= value)
+                        query = query.having(func.count(TicketAnalysisHistory.id) >= value)
                     elif operator == 'lt':
-                        query = query.having(func.count(Tickets.id_ticket) < value)
+                        query = query.having(func.count(TicketAnalysisHistory.id) < value)
                     elif operator == 'lte':
-                        query = query.having(func.count(Tickets.id_ticket) <= value)
+                        query = query.having(func.count(TicketAnalysisHistory.id) <= value)
                     elif operator == 'eq':
-                        query = query.having(func.count(Tickets.id_ticket) == value)
+                        query = query.having(func.count(TicketAnalysisHistory.id) == value)
                     else:
                         continue
 
@@ -841,12 +840,11 @@ def get_tickets():
         # Import local nécessaire pour cette fonction
         from app.models.trello_models import TicketAnalysisHistory
 
-        # Récupérer l'analyse_board lié à analyse_id
-        analyse_board = db.session.query(AnalyseBoard).filter_by(analyse_id=analyse_id).first()
-        if not analyse_board:
-            return jsonify({"status": "error", "message": "Aucun analyse_board trouvé pour cette analyse"}), 404
-
-        query = db.session.query(Tickets).filter(Tickets.analyse_board_id == analyse_board.id)
+        # Nouvelle logique : utiliser ticket_analysis_history pour trouver les tickets d'une analyse
+        # sans duplication dans la table tickets
+        query = db.session.query(Tickets).join(
+            TicketAnalysisHistory, Tickets.id_ticket == TicketAnalysisHistory.ticket_id
+        ).filter(TicketAnalysisHistory.analyse_id == analyse_id)
 
         applied_filters = []
         for f in filters:
@@ -1132,7 +1130,7 @@ def reanalyze_ticket(ticket_id):
         db.session.add(analyse_board)
         db.session.flush()  # Pour obtenir l'ID
 
-        # Enregistrer dans l'historique
+        # Enregistrer dans l'historique (sans dupliquer le ticket dans la table tickets)
         history = TicketAnalysisHistory(
             ticket_id=ticket.id_ticket,
             analyse_id=reanalyse_session.analyse_id,  # Utiliser la nouvelle session de réanalyse
