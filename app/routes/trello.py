@@ -78,11 +78,20 @@ def analyze_list_cards(board_id, list_id):
                 'labels': 'true'
             }
             
+            print(f"[DEBUG] Récupération des cartes de la liste {list_id}")
+            print(f"[DEBUG] URL: {cards_url}")
+            print(f"[DEBUG] Clé API présente: {'✓' if os.environ.get('TRELLO_API_KEY') else '✗'}")
+            
             response = requests.get(cards_url, params=params)
             response.raise_for_status()
             cards_data = response.json()
             
+            print(f"[DEBUG] Nombre de cartes trouvées: {len(cards_data)}")
+            if cards_data:
+                print(f"[DEBUG] Première carte: {cards_data[0].get('name', 'Sans nom')}")
+            
         except requests.exceptions.RequestException as e:
+            print(f"[ERROR] Erreur API Trello: {str(e)}")
             return jsonify({"error": f"Erreur lors de la récupération des cartes: {str(e)}"}), 500
         
         if not cards_data:
@@ -114,7 +123,6 @@ def analyze_list_cards(board_id, list_id):
             existing_ticket = Tickets.get_by_ticket_id(card['id'])
             if existing_ticket and existing_ticket.ticket_metadata:
                 # Recherche d'une analyse précédente dans l'historique
-                from app.models.trello_models import TicketAnalysisHistory
                 last_analysis = TicketAnalysisHistory.query.filter_by(ticket_id=existing_ticket.id_ticket).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
                 if last_analysis:
                     print(f"📌 Ticket {card['id']} déjà analysé, utilisation du résultat en cache")
@@ -152,6 +160,7 @@ def analyze_list_cards(board_id, list_id):
             result = analyzer.analyze_card_criticality(card_data)
             result['analyzed_at'] = datetime.now().isoformat()
             analysis_results.append(result)
+            print(f"[DEBUG] Résultat analyse pour {card['id']}: success={result.get('success', False)}, criticality={result.get('criticality_level', 'N/A')}")
 
 
 
@@ -215,7 +224,9 @@ def analyze_list_cards(board_id, list_id):
                 result['move_error'] = str(move_error)
 
             # Si analyse_board_id est fourni, sauvegarder dans la table tickets et dans l'historique
+            print(f"[DEBUG] Vérification sauvegarde - analyse_board_id: {analyse_board_id}, success: {result.get('success', False)}")
             if analyse_board_id and result.get('success', False):
+                print(f"[DEBUG] Sauvegarde du ticket {card['id']} en cours...")
                 try:
                     analyse_board = AnalyseBoard.query.get(analyse_board_id)
                     analyse_id = analyse_board.analyse_id if analyse_board else None
@@ -256,8 +267,11 @@ def analyze_list_cards(board_id, list_id):
                         'ticket_id': card['id'],
                         'card_name': card['name']
                     })
+                    print(f"[DEBUG] Ticket {card['id']} ajouté à la liste de sauvegarde")
                 except Exception as ticket_error:
                     print(f"Erreur lors de la sauvegarde du ticket {card['id']}: {str(ticket_error)}")
+            else:
+                print(f"[DEBUG] Ticket {card['id']} ignoré - analyse_board_id: {analyse_board_id}, success: {result.get('success', False)}")
         
         # Commit des tickets sauvegardés
         if saved_tickets:
@@ -1102,7 +1116,7 @@ def reanalyze_ticket(ticket_id):
 
         # Créer une nouvelle session d'analyse pour la réanalyse
         reanalyse_session = Analyse(
-            reference=f"REANALYSE-{datetime.now().strftime('%Y%m%d_%H%M%S')}-{ticket_id}",
+            reference=f"REANALYSE-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             reanalyse=True,  # Marquer comme réanalyse
             createdAt=datetime.now()
         )
