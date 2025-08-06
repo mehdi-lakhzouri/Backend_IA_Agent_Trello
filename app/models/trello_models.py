@@ -117,15 +117,17 @@ class Analyse(db.Model):
     __tablename__ = 'analyse'
     analyse_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     reference = db.Column(db.String(64), unique=True, nullable=False)
+    reanalyse = db.Column(db.Boolean, default=False)
     createdAt = db.Column(db.DateTime, default=datetime.utcnow)
     updatedAt = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def __init__(self, reference=None, createdAt=None):
+    def __init__(self, reference=None, reanalyse=False, createdAt=None):
         if reference is None:
             # Génère une référence unique basée sur la date et l'heure
             self.reference = f"analyse_{datetime.utcnow().strftime('%Y%m%d_%H%M')}"
         else:
             self.reference = reference
+        self.reanalyse = reanalyse
         self.createdAt = createdAt or datetime.utcnow()
         self.updatedAt = datetime.utcnow()
 
@@ -137,6 +139,7 @@ class Analyse(db.Model):
         return {
             'analyse_id': self.analyse_id,
             'reference': self.reference,
+            'reanalyse': self.reanalyse,
             'createdAt': self.createdAt.isoformat() if self.createdAt else None,
             'updatedAt': self.updatedAt.isoformat() if self.updatedAt else None
         }
@@ -269,19 +272,17 @@ class TicketAnalysisHistory(db.Model):
     analyse_justification = db.Column(db.JSON, nullable=True)
     criticality_level = db.Column(db.Enum('low', 'medium', 'high', name='criticality_level_enum'), nullable=True)
     analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
-    reanalyse = db.Column(db.Boolean, default=False)
 
     # Relations avec les tables tickets et analyse
     ticket = db.relationship('Tickets', backref=db.backref('analysis_history', lazy=True))
     analyse = db.relationship('Analyse', backref=db.backref('ticket_analysis_history', lazy=True))
 
-    def __init__(self, ticket_id, analyse_id, analyse_justification=None, criticality_level=None, analyzed_at=None, reanalyse=False):
+    def __init__(self, ticket_id, analyse_id, analyse_justification=None, criticality_level=None, analyzed_at=None):
         self.ticket_id = ticket_id
         self.analyse_id = analyse_id
         self.analyse_justification = analyse_justification
         self.criticality_level = criticality_level
         self.analyzed_at = analyzed_at or datetime.utcnow()
-        self.reanalyse = reanalyse
 
     def __repr__(self):
         return f'<TicketAnalysisHistory {self.id}: Ticket {self.ticket_id}>'
@@ -293,8 +294,7 @@ class TicketAnalysisHistory(db.Model):
             'analyse_id': self.analyse_id,
             'analyse_justification': self.analyse_justification,
             'criticality_level': self.criticality_level,
-            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None,
-            'reanalyse': self.reanalyse
+            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None
         }
 
     def to_json(self):

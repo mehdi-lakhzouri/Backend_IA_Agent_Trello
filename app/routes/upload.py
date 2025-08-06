@@ -36,20 +36,44 @@ def upload_document():
             return jsonify({
                 "error": f"Type de fichier non autorisé. Extensions autorisées: {', '.join(current_app.config['ALLOWED_EXTENSIONS'])}"
             }), 400
-        # Sauvegarde sécurisée du fichier
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+            
+        # Vérification de la taille avant téléchargement
+        file_content = file.read()
+        file.seek(0)  # Réinitialiser le curseur pour permettre la lecture ultérieure
+        
+        # Vérifier la taille (max 10 Mo par défaut ou valeur de la config)
+        max_size = current_app.config.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024)  # 10 Mo par défaut
+        if len(file_content) > max_size:
+            return jsonify({
+                "error": f"Fichier trop volumineux. Taille maximale: {max_size / (1024 * 1024):.1f} Mo"
+            }), 400
+            
+        # Générer un nom de fichier unique
+        unique_filename, original_secure_name = FileHandler.generate_unique_filename(
+            file.filename, 
+            file_content
+        )
+        
+        # S'assurer que le dossier d'upload existe
+        os.makedirs(current_app.config['UPLOAD_FOLDER'], exist_ok=True)
+        
+        # Sauvegarde du fichier avec le nom unique
+        filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(filepath)
         
         # Extraction du contenu
         content = FileHandler.extract_content(filepath)
         if not content:
+            # Supprimer le fichier si extraction impossible
+            os.remove(filepath)
             return jsonify({"error": "Impossible d'extraire le contenu du fichier"}), 400
 
         # Vérification de doublon avant vectorisation
         vectorizer = VectorizerService()
-        duplicate_info = vectorizer.check_duplicate_file(filename, content)
+        duplicate_info = vectorizer.check_duplicate_file(original_secure_name, content)
         if duplicate_info.get("exists"):
+            # Supprimer le fichier si c'est un doublon
+            os.remove(filepath)
             return jsonify({
                 "error": "Fichier déjà existant",
                 "details": duplicate_info
@@ -57,18 +81,22 @@ def upload_document():
         
         # Vectorisation et stockage
         try:
-            document_id = vectorizer.vectorize_and_store(content, filename)
+            # Stocker avec le nom original pour l'affichage, mais en utilisant le fichier avec nom unique
+            document_id = vectorizer.vectorize_and_store(content, original_secure_name)
         except Exception as e:
+            # Nettoyer en cas d'erreur
+            os.remove(filepath)
             current_app.logger.error(f"Erreur lors de la vectorisation/embedding: {str(e)}")
             return jsonify({"error": "Embedding service unavailable, please try again later."}), 503
         
-        # Nettoyage du fichier temporaire (optionnel)
-        # os.remove(filepath)
+        # Supprimer le fichier temporaire après traitement réussi
+        os.remove(filepath)
         
         return jsonify({
             "message": "Document uploadé et vectorisé avec succès",
             "document_id": document_id,
-            "filename": filename,
+            "original_filename": original_secure_name,
+            "system_filename": unique_filename,
             "content_length": len(content)
         }), 200
         

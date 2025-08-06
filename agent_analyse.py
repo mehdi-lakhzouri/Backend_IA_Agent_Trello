@@ -127,6 +127,7 @@ def create_global_analyse_session() -> Analyse:
         # Créer la session d'analyse globale
         analyse = Analyse(
             reference=reference,
+            reanalyse=False,  # Mettre reanalyse à False lors de l'analyse initiale
             createdAt=datetime.now()
         )
 

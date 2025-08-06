@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from app.services.trello_service import get_trello_user_info
 from app.services.criticality_analyzer import CriticalityAnalyzer
-from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary, Config, Analyse, AnalyseBoard, Tickets
+from app.models.trello_models import TrelloCard, CriticalityAnalysis, BoardAnalysisSummary, Config, Analyse, AnalyseBoard, Tickets, TicketAnalysisHistory
 from app import db
 from app.utils.crypto_service import crypto_service
 from app.services.database_service import DatabaseService
@@ -217,7 +217,6 @@ def analyze_list_cards(board_id, list_id):
             # Si analyse_board_id est fourni, sauvegarder dans la table tickets et dans l'historique
             if analyse_board_id and result.get('success', False):
                 try:
-                    from app.models.trello_models import TicketAnalysisHistory, AnalyseBoard
                     analyse_board = AnalyseBoard.query.get(analyse_board_id)
                     analyse_id = analyse_board.analyse_id if analyse_board else None
                     # Vérifier si le ticket existe déjà
@@ -249,8 +248,8 @@ def analyze_list_cards(board_id, list_id):
                         analyse_id=analyse_id,
                         analyse_justification={'justification': result.get('justification')},
                         criticality_level=result.get('criticality_level'),
-                        analyzed_at=datetime.now(),
-                        reanalyse=False  # Analyse initiale, pas une réanalyse
+                        analyzed_at=datetime.now()
+                        # Note: reanalyse a été déplacé vers la table analyse
                     )
                     db.session.add(history)
                     saved_tickets.append({
@@ -825,6 +824,9 @@ def get_tickets():
         order_by = order_by if order_by in {'criticality_level', 'analyzed_at', 'name'} else 'analyzed_at'
         order_direction = order_direction if order_direction in {'asc', 'desc'} else 'desc'
 
+        # Import local nécessaire pour cette fonction
+        from app.models.trello_models import TicketAnalysisHistory
+
         # Récupérer l'analyse_board lié à analyse_id
         analyse_board = db.session.query(AnalyseBoard).filter_by(analyse_id=analyse_id).first()
         if not analyse_board:
@@ -862,19 +864,34 @@ def get_tickets():
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
         tickets_data = []
-        from app.models.trello_models import TicketAnalysisHistory
         for ticket in pagination.items:
             meta = ticket.ticket_metadata or {}
-            # Récupérer la dernière analyse pour ce ticket
-            last_analysis = TicketAnalysisHistory.query.filter_by(ticket_id=ticket.id_ticket).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
+            # Récupérer la dernière analyse pour ce ticket avec info de réanalyse
+            last_analysis = db.session.query(TicketAnalysisHistory).join(
+                AnalyseBoard, TicketAnalysisHistory.analyse_id == AnalyseBoard.analyse_id
+            ).join(
+                Analyse, AnalyseBoard.analyse_id == Analyse.analyse_id
+            ).filter(
+                TicketAnalysisHistory.ticket_id == ticket.id_ticket
+            ).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
+            
             if last_analysis:
+                # Récupérer l'analyse associée pour le flag reanalyse
+                analyse = db.session.query(Analyse).join(
+                    AnalyseBoard, Analyse.analyse_id == AnalyseBoard.analyse_id
+                ).filter(
+                    AnalyseBoard.analyse_id == last_analysis.analyse_id
+                ).first()
+                
                 justification = last_analysis.analyse_justification.get('justification') if last_analysis.analyse_justification else ''
                 analyzed_at = last_analysis.analyzed_at.isoformat() if last_analysis.analyzed_at else None
                 criticality_level = last_analysis.criticality_level.upper() if last_analysis.criticality_level else None
+                is_reanalyse = analyse.reanalyse if analyse else False
             else:
                 justification = ''
                 analyzed_at = None
                 criticality_level = None
+                is_reanalyse = False
 
             tickets_data.append({
                 "ticket_id": ticket.ticket_id,
@@ -887,7 +904,7 @@ def get_tickets():
                 "criticality_level": criticality_level,
                 "justification": justification,
                 "analyzed_at": analyzed_at,
-                "is_reanalyse": last_analysis.reanalyse if last_analysis else False  # Flag reanalyse
+                "is_reanalyse": is_reanalyse  # Utiliser la variable calculée
             })
 
         return jsonify({
@@ -1060,7 +1077,6 @@ def reanalyze_ticket(ticket_id):
     Réanalyse un ticket précis, enregistre le résultat dans ticket_analysis_history et retourne le nouveau résultat.
     """
     try:
-        from app.models.trello_models import Tickets, TicketAnalysisHistory, AnalyseBoard
         from app.services.criticality_analyzer import CriticalityAnalyzer
         ticket = Tickets.get_by_ticket_id(ticket_id)
         if not ticket:
@@ -1084,18 +1100,32 @@ def reanalyze_ticket(ticket_id):
         result = analyzer.analyze_card_criticality(card_data)
         result['analyzed_at'] = datetime.now().isoformat()
 
-        # Récupérer analyse_id via analyse_board
-        analyse_board = AnalyseBoard.query.get(ticket.analyse_board_id)
-        analyse_id = analyse_board.analyse_id if analyse_board else None
+        # Créer une nouvelle session d'analyse pour la réanalyse
+        reanalyse_session = Analyse(
+            reference=f"REANALYSE-{datetime.now().strftime('%Y%m%d_%H%M%S')}-{ticket_id}",
+            reanalyse=True,  # Marquer comme réanalyse
+            createdAt=datetime.now()
+        )
+        db.session.add(reanalyse_session)
+        db.session.flush()  # Pour obtenir l'ID
+
+        # Créer un nouveau AnalyseBoard pour cette réanalyse
+        analyse_board = AnalyseBoard(
+            analyse_id=reanalyse_session.analyse_id,
+            platform='trello',
+            createdAt=datetime.now()
+        )
+        db.session.add(analyse_board)
+        db.session.flush()  # Pour obtenir l'ID
 
         # Enregistrer dans l'historique
         history = TicketAnalysisHistory(
             ticket_id=ticket.id_ticket,
-            analyse_id=analyse_id,
+            analyse_id=reanalyse_session.analyse_id,  # Utiliser la nouvelle session de réanalyse
             analyse_justification={'justification': result.get('justification')},
             criticality_level=result.get('criticality_level'),
-            analyzed_at=datetime.now(),
-            reanalyse=True  # Flag pour indiquer qu'il s'agit d'une réanalyse
+            analyzed_at=datetime.now()
+            # Note: reanalyse a été déplacé vers la table analyse
         )
         db.session.add(history)
         
@@ -1124,23 +1154,28 @@ def get_ticket_analysis_history(ticket_id):
     Retourne l'historique complet des analyses pour un ticket.
     """
     try:
-        from app.models.trello_models import Tickets, TicketAnalysisHistory
         ticket = Tickets.get_by_ticket_id(ticket_id)
         if not ticket:
             return jsonify({"status": "error", "message": f"Ticket {ticket_id} introuvable"}), 404
 
-        history_entries = TicketAnalysisHistory.query.filter_by(ticket_id=ticket.id_ticket)\
-            .order_by(TicketAnalysisHistory.analyzed_at.desc()).all()
+        # Récupérer l'historique avec l'information de réanalyse
+        history_entries = db.session.query(TicketAnalysisHistory, Analyse).join(
+            AnalyseBoard, TicketAnalysisHistory.analyse_id == AnalyseBoard.analyse_id
+        ).join(
+            Analyse, AnalyseBoard.analyse_id == Analyse.analyse_id
+        ).filter(
+            TicketAnalysisHistory.ticket_id == ticket.id_ticket
+        ).order_by(TicketAnalysisHistory.analyzed_at.desc()).all()
 
         history_list = []
-        for entry in history_entries:
+        for entry, analyse in history_entries:
             history_list.append({
                 "analysis_id": entry.id,
                 "analyse_id": entry.analyse_id,
                 "justification": entry.analyse_justification.get('justification') if entry.analyse_justification else '',
                 "criticality_level": entry.criticality_level,
                 "analyzed_at": entry.analyzed_at.isoformat() if entry.analyzed_at else None,
-                "reanalyse": entry.reanalyse
+                "reanalyse": analyse.reanalyse  # Utiliser le champ reanalyse de la table analyse
             })
 
         return jsonify({
@@ -1160,13 +1195,20 @@ def get_analysis_statistics():
     Retourne des statistiques sur les analyses et réanalyses.
     """
     try:
-        from app.models.trello_models import TicketAnalysisHistory, Tickets
-        
         # Statistiques générales
         total_analyses = TicketAnalysisHistory.query.count()
-        total_reanalyses = TicketAnalysisHistory.query.filter_by(reanalyse=True).count()
-        total_initial_analyses = total_analyses - total_reanalyses
         total_tickets = Tickets.query.count()
+        
+        # Compter les réanalyses en utilisant la table analyse
+        total_reanalyses = db.session.query(TicketAnalysisHistory).join(
+            AnalyseBoard, TicketAnalysisHistory.analyse_id == AnalyseBoard.analyse_id
+        ).join(
+            Analyse, AnalyseBoard.analyse_id == Analyse.analyse_id
+        ).filter(
+            Analyse.reanalyse == True
+        ).count()
+        
+        total_initial_analyses = total_analyses - total_reanalyses
         
         # Répartition par niveau de criticité
         criticality_stats = {
@@ -1178,20 +1220,29 @@ def get_analysis_statistics():
         # Statistiques par board
         board_stats = db.session.query(
             Tickets.board_name,
-            func.count(TicketAnalysisHistory.id).label('total_analyses'),
-            func.count(
-                db.session.query().filter(TicketAnalysisHistory.reanalyse == True).as_scalar()
-            ).label('reanalyses')
+            func.count(TicketAnalysisHistory.id).label('total_analyses')
         ).join(TicketAnalysisHistory, Tickets.id_ticket == TicketAnalysisHistory.ticket_id)\
          .group_by(Tickets.board_name).all()
         
         board_list = []
-        for board_name, total, reanalyses in board_stats:
+        for board_name, total in board_stats:
+            # Calculer les réanalyses pour ce board spécifique
+            board_reanalyses = db.session.query(TicketAnalysisHistory).join(
+                Tickets, TicketAnalysisHistory.ticket_id == Tickets.id_ticket
+            ).join(
+                AnalyseBoard, TicketAnalysisHistory.analyse_id == AnalyseBoard.analyse_id
+            ).join(
+                Analyse, AnalyseBoard.analyse_id == Analyse.analyse_id
+            ).filter(
+                Tickets.board_name == board_name,
+                Analyse.reanalyse == True
+            ).count()
+            
             board_list.append({
                 'board_name': board_name,
                 'total_analyses': total,
-                'reanalyses': reanalyses,
-                'initial_analyses': total - reanalyses
+                'reanalyses': board_reanalyses,
+                'initial_analyses': total - board_reanalyses
             })
         
         return jsonify({
