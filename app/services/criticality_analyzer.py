@@ -183,6 +183,178 @@ Now assess this card.
 '''
 
 
+    def _build_reanalysis_prompt(self, card_data: Dict[str, Any], app_context: str, similar_cards: str, previous_analysis: Dict[str, Any]) -> str:
+        """
+        Génère un prompt spécialisé pour la réanalyse avec vérification approfondie.
+        """
+        previous_level = previous_analysis.get('criticality_level', 'UNKNOWN')
+        previous_justification = previous_analysis.get('justification', 'No previous justification')
+        
+        return f'''
+You are a Senior Product Owner and Risk Assessment Specialist conducting a **DETAILED RE-ANALYSIS** of a previously evaluated Trello card. Your goal is to perform a thorough verification of the criticality level with enhanced scrutiny and provide a clear, concise justification in English.
+
+━━━━━━━━━━━━━━━━━━
+ APPLICATION CONTEXT:
+{app_context}
+
+ SIMILAR CARDS HISTORY:
+{similar_cards}
+
+ CARD UNDER RE-ANALYSIS:
+- **Title**: {card_data.get('name', 'N/A')}
+- **Description**: {card_data.get('desc', 'No description')}
+- **Labels**: {', '.join([label.get('name', '') for label in card_data.get('labels', [])]) or 'None'}
+- **Due Date**: {card_data.get('due', 'None')}
+- **List Name**: {card_data.get('list_name', 'N/A')}
+- **Members**: {', '.join([member.get('fullName', '') for member in card_data.get('members', [])]) or 'None'}
+
+ PREVIOUS ANALYSIS:
+- **Previous Level**: {previous_level}
+- **Previous Justification**: {previous_justification}
+
+━━━━━━━━━━━━━━━━━━
+ RE-ANALYSIS METHODOLOGY:
+1. **DEEPER CONTEXT ANALYSIS**: Re-examine the card against the application context with more granular detail
+2. **IMPACT VERIFICATION**: Cross-check business impact, user experience, and technical risks
+3. **DEPENDENCY ASSESSMENT**: Consider downstream effects and interconnected systems
+4. **TIMELINE URGENCY**: Evaluate time-sensitive implications and priority conflicts
+5. **VALIDATION**: Compare with previous assessment and justify any changes or confirmations
+
+ ENHANCED CRITICALITY FRAMEWORK:
+- **HIGH**: Production-critical issues, data security risks, user safety concerns, revenue-impacting problems, or system-wide failures
+- **MEDIUM**: Significant workflow disruptions, performance degradation, user experience issues, or moderate business impact
+- **LOW**: Minor improvements, documentation, UI polish, or low-impact optimizations
+
+━━━━━━━━━━━━━━━━━━
+ DELIVERABLE:
+Provide a **CONCISE, PROFESSIONAL JUSTIFICATION** (3-4 sentences maximum) in English that:
+- Clearly states the confirmed or revised criticality level
+- Explains the key factors that drive this assessment
+- References specific aspects of the application context
+- Mentions any changes from the previous analysis (if applicable)
+
+ FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+CRITICALITY LEVEL: [HIGH/MEDIUM/LOW]
+JUSTIFICATION: [3-4 sentences explaining the assessment in clear, professional English]
+
+━━━━━━━━━━━━━━━━━━
+Proceed with the detailed re-analysis now.
+'''
+
+    def reanalyze_card_criticality(self, card_data: Dict[str, Any], previous_analysis: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Effectue une réanalyse approfondie de la criticité d'une card avec vérification renforcée.
+        
+        Args:
+            card_data: Données de la card à réanalyser
+            previous_analysis: Résultat de l'analyse précédente pour comparaison
+            
+        Returns:
+            Résultat de la réanalyse avec justification courte et claire
+        """
+        try:
+            # Récupérer le contexte de l'application
+            app_context = self._get_application_context()
+            
+            if not app_context or app_context.strip() == "" or app_context == self._get_default_context():
+                return {
+                    'card_id': card_data.get('id'),
+                    'card_name': card_data.get('name'),
+                    'criticality_level': 'LOW',
+                    'justification': "Default LOW criticality assigned - Please upload application documentation for more accurate analysis",
+                    'analyzed_at': None,
+                    'success': True,
+                    'is_reanalysis': True
+                }
+            
+            # Récupérer des cards similaires
+            similar_cards = self._get_similar_cards_context(card_data)
+            
+            # Construire le prompt de réanalyse spécialisé
+            prompt = self._build_reanalysis_prompt(card_data, app_context, similar_cards, previous_analysis or {})
+            
+            # Analyser avec Gemini
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # Parser la réponse pour extraire le niveau et la justification
+            criticality_level = 'LOW'  # Niveau par défaut
+            justification = response_text
+            
+            # Extraire le niveau de criticité
+            response_upper = response_text.upper()
+            if 'CRITICALITY LEVEL: HIGH' in response_upper or 'HIGH' in response_upper.split('\n')[0]:
+                criticality_level = 'HIGH'
+            elif 'CRITICALITY LEVEL: MEDIUM' in response_upper or 'MEDIUM' in response_upper.split('\n')[0]:
+                criticality_level = 'MEDIUM'
+            elif 'CRITICALITY LEVEL: LOW' in response_upper or 'LOW' in response_upper.split('\n')[0]:
+                criticality_level = 'LOW'
+            
+            # Extraire la justification (partie après "JUSTIFICATION:")
+            lines = response_text.split('\n')
+            justification_lines = []
+            capture_justification = False
+            
+            for line in lines:
+                if 'JUSTIFICATION:' in line.upper():
+                    # Prendre le texte après "JUSTIFICATION:" sur la même ligne
+                    justification_part = line.split(':', 1)
+                    if len(justification_part) > 1:
+                        justification_lines.append(justification_part[1].strip())
+                    capture_justification = True
+                elif capture_justification and line.strip():
+                    justification_lines.append(line.strip())
+            
+            if justification_lines:
+                justification = ' '.join(justification_lines)
+            else:
+                # Fallback: utiliser toute la réponse si la structure n'est pas respectée
+                justification = response_text
+            
+            # Sauvegarder dans ChromaDB pour enrichir l'historique
+            try:
+                card_analysis_text = f"""
+                Card: {card_data.get('name', 'Unknown')}
+                Criticality: {criticality_level}
+                Analysis: {justification}
+                Context: Re-analysis
+                """
+                
+                self.chroma_manager.add_documents(
+                    documents=[card_analysis_text],
+                    metadatas=[{
+                        'card_id': card_data.get('id'),
+                        'card_name': card_data.get('name'),
+                        'type': 'card_reanalysis',
+                        'criticality_level': criticality_level
+                    }]
+                )
+            except Exception as e:
+                current_app.logger.warning(f"Erreur lors de la sauvegarde dans ChromaDB: {str(e)}")
+            
+            return {
+                'card_id': card_data.get('id'),
+                'card_name': card_data.get('name'),
+                'criticality_level': criticality_level,
+                'justification': justification,
+                'analyzed_at': None,
+                'success': True,
+                'is_reanalysis': True
+            }
+            
+        except Exception as e:
+            current_app.logger.error(f"Erreur lors de la réanalyse de criticité: {str(e)}")
+            return {
+                'card_id': card_data.get('id'),
+                'card_name': card_data.get('name'),
+                'criticality_level': 'LOW',
+                'justification': f"Re-analysis failed due to technical error: {str(e)}. Assigned LOW criticality as fallback.",
+                'analyzed_at': None,
+                'success': False,
+                'error': str(e),
+                'is_reanalysis': True
+            }
+
     def analyze_card_criticality(self, card_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyse la criticité d'une card Trello.
@@ -266,6 +438,119 @@ Now assess this card.
                 'error': str(e),
                 'success': False
             }
+
+    # =============================
+    # Batch analysis optimisation
+    # =============================
+    def analyze_cards_batch(self, cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Analyse plusieurs cards en un seul appel LLM pour optimiser latence & coût.
+
+        Stratégie:
+        - Récupère le contexte applicatif une seule fois.
+        - Construit un prompt listant les cartes sous forme JSON minimale.
+        - Demande un retour STRICTEMENT en JSON (liste d'objets) avec: id, criticality_level (HIGH|MEDIUM|LOW|OUT_OF_CONTEXT), justification.
+        - Si parsing échoue: fallback vers analyse unitaire.
+        """
+        results: List[Dict[str, Any]] = []
+        if not cards:
+            return results
+        try:
+            app_context = self._get_application_context()
+            # Si pas de contexte, appliquer fallback LOW
+            if not app_context or app_context.strip() == "" or app_context == self._get_default_context():
+                for c in cards:
+                    results.append({
+                        'card_id': c.get('id'),
+                        'card_name': c.get('name'),
+                        'criticality_level': 'LOW',
+                        'justification': "Criticité assignée par défaut (LOW) - Veuillez uploader un document de description pour une analyse plus précise",
+                        'analyzed_at': None,
+                        'success': True
+                    })
+                return results
+
+            # Préparer liste de cartes condensée
+            def _short(text: str, limit: int = 400):
+                if not text:
+                    return ''
+                t = text.strip().replace('\n', ' ')
+                return (t[:limit] + '…') if len(t) > limit else t
+
+            cards_spec = []
+            for c in cards:
+                cards_spec.append({
+                    'id': c.get('id'),
+                    'name': c.get('name'),
+                    'desc': _short(c.get('desc', '')),
+                    'due': c.get('due'),
+                    'list_name': c.get('list_name'),
+                    'labels': [lbl.get('name') for lbl in c.get('labels', [])],
+                    'members': [m.get('fullName') for m in c.get('members', [])]
+                })
+
+            prompt = f"""
+You are a senior product owner risk analyst. You will receive an APPLICATION CONTEXT and a LIST OF TREllo CARDS in JSON.
+Return ONLY a JSON array. Each element MUST contain:
+  id: original card id
+  criticality_level: one of HIGH, MEDIUM, LOW, or OUT_OF_CONTEXT (if unrelated to context)
+  justification: 1 short paragraph (max 3 sentences) in French. If OUT_OF_CONTEXT specify politely it's outside provided context.
+Rules:
+- Every in-context card must be HIGH / MEDIUM / LOW (no other value)
+- Be concise, no markdown, no extra commentary outside the JSON
+APPLICATION CONTEXT:\n{app_context[:4000]}\n
+CARDS_JSON = {json.dumps(cards_spec, ensure_ascii=False)}
+
+Return ONLY the JSON array (no explanation outside JSON).
+"""
+            response = self.model.generate_content(prompt)
+            raw_text = (response.text or '').strip()
+            # Isolate JSON array
+            if '[' not in raw_text:
+                raise ValueError('Réponse batch sans JSON array')
+            json_segment = raw_text[raw_text.index('['): raw_text.rindex(']') + 1]
+            try:
+                parsed = json.loads(json_segment)
+            except Exception as parse_err:  # noqa: BLE001
+                raise ValueError(f"Parsing JSON batch échoué: {parse_err}") from parse_err
+            # Map results by id for safety
+            by_id = {str(r.get('id')): r for r in parsed if isinstance(r, dict) and r.get('id')}
+            for c in cards:
+                cid = str(c.get('id'))
+                p = by_id.get(cid)
+                if not p:
+                    # Fallback single analyse
+                    single = self.analyze_card_criticality(c)
+                    results.append(single)
+                    continue
+                lvl = (p.get('criticality_level') or p.get('criticality') or '').upper()
+                if lvl not in {'HIGH','MEDIUM','LOW','OUT_OF_CONTEXT'}:
+                    # Try detect keywords
+                    txt = json.dumps(p).upper()
+                    if 'HIGH' in txt:
+                        lvl = 'HIGH'
+                    elif 'MEDIUM' in txt:
+                        lvl = 'MEDIUM'
+                    elif 'LOW' in txt:
+                        lvl = 'LOW'
+                    else:
+                        lvl = 'LOW'
+                justification = p.get('justification') or p.get('reason') or ''
+                results.append({
+                    'card_id': cid,
+                    'card_name': c.get('name'),
+                    'criticality_level': lvl,
+                    'justification': justification,
+                    'analyzed_at': None,
+                    'success': True
+                })
+            return results
+        except Exception as e:  # noqa: BLE001
+            # Fallback: analyse unitaire pour chaque card
+            from flask import current_app
+            current_app.logger.warning(f"Batch analysis failed, fallback single: {e}")
+            for c in cards:
+                results.append(self.analyze_card_criticality(c))
+            return results
     
     def _save_analysis_to_history(self, card_data: Dict[str, Any], analysis_result: Dict[str, Any]):
         """

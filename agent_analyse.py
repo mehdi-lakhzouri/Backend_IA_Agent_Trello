@@ -13,14 +13,13 @@ from datetime import datetime
 from typing import List, Dict, Any
 import requests
 from logging.handlers import RotatingFileHandler
-from tools.add_etiquette_tool import apply_criticality_label_with_creation
-from tools.add_comment_tool import add_comment_to_card
+
 
 # Ajouter le répertoire racine au path pour les imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app import create_app, db
-from app.models.trello_models import Config, Analyse, AnalyseBoard, Tickets
+from app.models.trello_models import Config, Analyse, AnalyseBoard
 
 
 def setup_logging() -> logging.Logger:
@@ -170,9 +169,7 @@ def create_analyse_board(analyse: Analyse, config_data: Dict[str, Any]) -> Analy
         logger.error(f"Erreur lors de la création de l'analyse board: {str(e)}")
         db.session.rollback()
         raise e
-        logger.error(f"Erreur lors de la création de l'analyse board: {str(e)}")
-        db.session.rollback()
-        raise e
+
 
 
 def check_flask_server_running() -> bool:

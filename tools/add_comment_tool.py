@@ -22,7 +22,7 @@ def add_comment_to_card(card_id: str, token: str, comment: str) -> Dict:
 
     logger = logging.getLogger('add_comment_tool')
 
-    # URL correcte pour l'ajout de commentaire sur une carte Trello
+    # URL pour l'ajout de commentaire sur une carte Trello
     url = f"https://api.trello.com/1/cards/{card_id}/actions/comments"
 
     # Paramètres de la requête (key et token dans params, text dans data)
@@ -30,8 +30,10 @@ def add_comment_to_card(card_id: str, token: str, comment: str) -> Dict:
         'key': api_key,
         'token': token
     }
+    # Préfixe personnalisé
+    prefix = '[TALAN AGENT 🤖] '
     data = {
-        'text': comment
+        'text': f'{prefix}{comment}'
     }
 
     try:
