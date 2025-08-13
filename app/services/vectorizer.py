@@ -51,6 +51,10 @@ class VectorizerService:
             
             # Création des métadonnées pour chaque chunk
             documents = []
+            # Calcul du hash du contenu complet pour identification unique
+            import hashlib
+            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            
             for i, chunk in enumerate(chunks):
                 metadata = {
                     "document_id": document_id,
@@ -58,7 +62,8 @@ class VectorizerService:
                     "chunk_index": i,
                     "timestamp": datetime.now().isoformat(),
                     "chunk_size": len(chunk),
-                    "total_chunks": len(chunks)
+                    "total_chunks": len(chunks),
+                    "content_hash": content_hash
                 }
                 documents.append({
                     "content": chunk,
@@ -128,7 +133,13 @@ class VectorizerService:
             }
         """
         try:
+            import hashlib
             collection = self.db_manager.get_collection()
+            
+            # Calculer un hash du contenu si disponible
+            content_hash = None
+            if content:
+                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
             
             # Recherche par nom de fichier dans les métadonnées
             results = collection.get(
@@ -143,42 +154,29 @@ class VectorizerService:
                     "message": f"Aucun fichier trouvé avec le nom '{filename}'"
                 }
             
-            # Si un contenu est fourni, vérification plus précise
+            # Si un contenu est fourni, vérification plus précise avec hash
             if content:
-                # Reconstituer le contenu original de chaque document trouvé
-                documents_found = {}
-                for i, doc_id in enumerate(results['ids']):
-                    metadatas = results.get('metadatas') or []
-                    docs = results.get('documents') or []
-                    metadata = metadatas[i] if i < len(metadatas) else {}
-                    document_id = metadata.get('document_id')
-                    
-                    if document_id not in documents_found:
-                        documents_found[document_id] = {
-                            'chunks': [],
-                            'metadata': metadata
-                        }
-                    
-                    documents_found[document_id]['chunks'].append({
-                        'index': metadata.get('chunk_index', 0),
-                        'content': docs[i] if i < len(docs) else ''
-                    })
+                # Calculer le hash du contenu fourni
+                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
                 
-                # Vérifier si le contenu correspond
-                for doc_id, doc_data in documents_found.items():
-                    # Trier les chunks par index et reconstituer
-                    sorted_chunks = sorted(doc_data['chunks'], key=lambda x: x['index'])
-                    reconstructed_content = ''.join([chunk['content'] for chunk in sorted_chunks])
-                    
-                    # Comparaison du contenu (en ignorant les espaces de fin)
-                    if reconstructed_content.strip() == content.strip():
-                        return {
-                            "exists": True,
-                            "message": "Le fichier existe déjà"
-                        }
+                # Vérifier si le hash correspond à un document existant
+                for i, _ in enumerate(results['ids']):
+                    metadatas = results.get('metadatas') or []
+                    if i < len(metadatas):
+                        metadata = metadatas[i]
+                        stored_hash = metadata.get('content_hash')
+                        
+                        if stored_hash and stored_hash == content_hash:
+                            return {
+                                "exists": True,
+                                "document_id": metadata.get("document_id"),
+                                "message": "Le contenu de ce fichier existe déjà"
+                            }
+                
+                # Si le nom existe mais le contenu est différent
                 return {
-                    "exists": True,
-                    "message": "Le fichier existe déjà"
+                    "exists": False,
+                    "message": "Un fichier de même nom mais de contenu différent existe déjà"
                 }
             
             # Retour simple si pas de vérification de contenu

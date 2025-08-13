@@ -4,7 +4,10 @@ Validation, lecture et traitement des fichiers uploadés.
 """
 
 import os
-from typing import Optional, Set
+import uuid
+import hashlib
+from datetime import datetime
+from typing import Optional, Set, Tuple
 from werkzeug.utils import secure_filename
 from flask import current_app
 
@@ -117,6 +120,38 @@ class FileHandler:
             secure_name = "unnamed_file"
         
         return secure_name
+        
+    @staticmethod
+    def generate_unique_filename(original_filename: str, file_content: bytes = None) -> Tuple[str, str]:
+        """
+        Génère un nom de fichier unique basé sur UUID, timestamp et hash du contenu.
+        
+        Args:
+            original_filename (str): Nom de fichier original
+            file_content (bytes, optional): Contenu du fichier pour générer un hash
+            
+        Returns:
+            Tuple[str, str]: (Nom unique, extension)
+        """
+        # Obtenir l'extension sécurisée
+        ext = FileHandler.get_file_extension(original_filename) or "txt"
+        secure_name = FileHandler.clean_filename(original_filename)
+        
+        # Générer un UUID
+        unique_id = str(uuid.uuid4())
+        
+        # Ajouter un timestamp
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        
+        # Calculer un hash du contenu si disponible
+        content_hash = ""
+        if file_content:
+            content_hash = hashlib.md5(file_content).hexdigest()[:8]
+            unique_filename = f"{timestamp}_{unique_id}_{content_hash}.{ext}"
+        else:
+            unique_filename = f"{timestamp}_{unique_id}.{ext}"
+            
+        return unique_filename, secure_name
     
     @staticmethod
     def get_file_info(filepath: str) -> dict:
