@@ -8,8 +8,7 @@ from datetime import datetime
 from app import db
 import json
 from sqlalchemy.sql import func
-
-
+from sqlalchemy import text
 @dataclass
 class TrelloCard:
     """Modèle de données pour une card Trello."""
@@ -110,7 +109,8 @@ class Config(db.Model):
     @classmethod
     def get_config_by_board(cls, board_id):
         """Récupère une configuration par board_id."""
-        return cls.query.filter(cls.config_data['boardId'].astext == board_id).first()
+        
+        return cls.query.filter(text("JSON_EXTRACT(config_data, '$.boardId') = :board_id")).params(board_id=board_id).first()
 
 
 class Analyse(db.Model):
