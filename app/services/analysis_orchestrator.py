@@ -55,26 +55,32 @@ class AnalysisOrchestrator:
             card = cards[card_index]
             existing_ticket = Tickets.get_by_ticket_id(card['id'])
             if existing_ticket and existing_ticket.ticket_metadata:
-                last_analysis = (
-                    TicketAnalysisHistory.query
-                    .filter_by(ticket_id=existing_ticket.id_ticket)
-                    .order_by(TicketAnalysisHistory.analyzed_at.desc())
-                    .first()
-                )
-                if last_analysis:
-                    analysis_results.append({
-                        'success': True,
-                        'criticality_level': last_analysis.criticality_level.upper() if last_analysis.criticality_level else None,
-                        'justification': last_analysis.analyse_justification.get('justification') if last_analysis.analyse_justification else None,
-                        'analyzed_at': last_analysis.analyzed_at.isoformat() if last_analysis.analyzed_at else None,
-                        'from_cache': True,
-                        'card_id': card['id'],
-                        'card_name': card['name']
-                    })
-                    if analyse_board_id:
-                        saved_tickets.append({'ticket_id': card['id'], 'card_name': card['name'], 'from_cache': True})
-                    card_index += 1
-                    continue
+                # Vérifier si la configuration a changé avant d'utiliser le cache
+                if self._is_cache_valid_for_config(existing_ticket, board_id):
+                    last_analysis = (
+                        TicketAnalysisHistory.query
+                        .filter_by(ticket_id=existing_ticket.id_ticket)
+                        .order_by(TicketAnalysisHistory.analyzed_at.desc())
+                        .first()
+                    )
+                    if last_analysis:
+                        analysis_results.append({
+                            'success': True,
+                            'criticality_level': last_analysis.criticality_level.upper() if last_analysis.criticality_level else None,
+                            'justification': last_analysis.analyse_justification.get('justification') if last_analysis.analyse_justification else None,
+                            'analyzed_at': last_analysis.analyzed_at.isoformat() if last_analysis.analyzed_at else None,
+                            'from_cache': True,
+                            'card_id': card['id'],
+                            'card_name': card['name']
+                        })
+                        if analyse_board_id:
+                            saved_tickets.append({'ticket_id': card['id'], 'card_name': card['name'], 'from_cache': True})
+                        card_index += 1
+                        continue
+                else:
+                    # Configuration a changé, invalider le cache pour ce ticket
+                    logger.info(f"[ORCH] Configuration changed for card {card['id']}, invalidating cache")
+                    Tickets.invalidate_analysis_cache(card['id'])
             payload = {
                 'id': card['id'], 'name': card['name'], 'desc': card.get('desc', ''), 'due': card.get('due'),
                 'list_name': list_name, 'board_id': board_id, 'board_name': board_name,
@@ -133,7 +139,16 @@ class AnalysisOrchestrator:
                     logger.debug(f"[ORCH] Comment added to {cid}")
                 
                 # Move
-                config = Config.get_config_by_board(board_id)
+                # IMPORTANT: récupérer la config correspondant à la liste en cours
+                config = None
+                try:
+                    # Si une config exacte (board+list) existe, on l'utilise, sinon fallback board
+                    if hasattr(Config, 'get_config_by_board_and_list'):
+                        config = Config.get_config_by_board_and_list(board_id, list_id)
+                    if not config:
+                        config = Config.get_config_by_board(board_id)
+                except Exception as _:
+                    config = Config.get_config_by_board(board_id)
                 if config and config.config_data and config.config_data.get('targetListId'):
                     self.trello_client.move_card(card_id=cid, new_list_id=config.config_data['targetListId'])
                     result['card_moved'] = True
@@ -144,16 +159,41 @@ class AnalysisOrchestrator:
                     logger.debug(f"[ORCH] No targetListId configured - skipping move for {cid}")
             # Persistence
             if analyse_board_id and result.get('success'):
+                # Si la carte a été déplacée, persister la nouvelle liste (id/nom) dans les métadonnées
+                persisted_list_id = result.get('target_list_id') if result.get('card_moved') else list_id
+                persisted_list_name = result.get('target_list_name') if result.get('card_moved') else list_name
+
                 ticket = TicketService.ensure_ticket(
                     analyse_board_id=analyse_board_id,
-                    trello_card={**payload, 'list_id': list_id},
+                    trello_card={**payload, 'list_id': persisted_list_id},
                     board_name=board_name,
-                    list_name=list_name,
+                    list_name=persisted_list_name,
                 )
+                
+                # Sauvegarder la configuration actuelle dans les métadonnées du ticket
+                config = Config.get_config_by_board(board_id)
+                if config and config.config_data:
+                    # Mettre à jour les métadonnées avec la configuration utilisée pour cette analyse
+                    if not ticket.ticket_metadata:
+                        ticket.ticket_metadata = {}
+                    
+                    ticket.ticket_metadata['last_analysis_config'] = {
+                        'targetListId': config.config_data.get('targetListId'),
+                        'listId': config.config_data.get('listId'),
+                        'boardId': config.config_data.get('boardId'),
+                        'analyzed_at': datetime.utcnow().isoformat()
+                    }
+                    
                 analyse_board = AnalyseBoard.query.get(analyse_board_id)
                 analyse_id = analyse_board.analyse_id if analyse_board else None
                 if analyse_id:
                     TicketService.save_history(ticket, analyse_id, result)
+                    # Si la carte a été déplacée, mettre à jour la liste dans les métadonnées du ticket
+                    if result.get('card_moved') and result.get('target_list_id'):
+                        try:
+                            TicketService.update_ticket_list(ticket, result['target_list_id'], result.get('target_list_name'))
+                        except Exception as e:
+                            logger.warning(f"[ORCH] Failed to update ticket metadata for move: {e}")
                     saved_tickets.append({'ticket_id': cid, 'card_name': payload['name']})
                     logger.debug(f"[ORCH] History saved ticket={ticket.id_ticket} analyse_id={analyse_id} card={cid}")
                 else:
@@ -217,3 +257,38 @@ class AnalysisOrchestrator:
             response['tickets_saved_count'] = len(saved_tickets)
         logger.debug(f"[ORCH] END analyze_list total_cards={total} saved={len(saved_tickets)}")
         return response
+
+    def _is_cache_valid_for_config(self, ticket: Tickets, board_id: str) -> bool:
+        """
+        Vérifie si le cache est valide pour la configuration actuelle.
+        Compare la configuration actuelle avec celle utilisée lors de la dernière analyse.
+        """
+        import json
+        try:
+            # Récupérer la configuration actuelle
+            current_config = Config.get_config_by_board(board_id)
+            if not current_config or not current_config.config_data:
+                logger.debug("[CACHE] Pas de config actuelle, cache invalide.")
+                return False
+
+            # Vérifier si le ticket a des métadonnées avec la configuration de l'analyse précédente
+            if not ticket.ticket_metadata or 'last_analysis_config' not in ticket.ticket_metadata:
+                logger.debug("[CACHE] Pas de config précédente dans les métadonnées, cache invalide.")
+                return False
+
+            last_config = ticket.ticket_metadata.get('last_analysis_config', {})
+
+            # Comparaison profonde et normalisée (JSON trié)
+            current_config_json = json.dumps(current_config.config_data, sort_keys=True, default=str)
+            last_config_json = json.dumps(last_config, sort_keys=True, default=str)
+
+            if current_config_json != last_config_json:
+                logger.info(f"[CACHE] Config différente, cache invalide.\nConfig actuelle: {current_config_json}\nConfig précédente: {last_config_json}")
+                return False
+
+            logger.debug("[CACHE] Config identique, cache valide.")
+            return True
+
+        except Exception as e:
+            logger.error(f"[CACHE] Erreur lors de la vérification du cache: {e}")
+            return False

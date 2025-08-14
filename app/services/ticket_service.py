@@ -52,3 +52,19 @@ class TicketService:
     @staticmethod
     def last_history(ticket: Tickets) -> Optional[TicketAnalysisHistory]:
         return TicketAnalysisHistory.query.filter_by(ticket_id=ticket.id_ticket).order_by(TicketAnalysisHistory.analyzed_at.desc()).first()
+
+    @staticmethod
+    def update_ticket_list(ticket: Tickets, new_list_id: str, new_list_name: Optional[str] = None) -> Tickets:
+        """Met à jour la liste (id/nom) dans les métadonnées du ticket après déplacement et persiste."""
+        try:
+            meta = ticket.ticket_metadata or {}
+            meta['list_id'] = new_list_id
+            if new_list_name is not None:
+                meta['list_name'] = new_list_name
+            meta['last_moved_at'] = datetime.utcnow().isoformat()
+            ticket.ticket_metadata = meta
+            db.session.commit()
+            return ticket
+        except Exception:
+            db.session.rollback()
+            raise
