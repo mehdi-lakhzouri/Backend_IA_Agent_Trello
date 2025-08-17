@@ -282,12 +282,6 @@ docker build -t talan-agent:latest .
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
-### Cloud Deployment
-
-```bash
-# Exemple déploiement cloud (à adapter selon le provider)
-# AWS ECS, Google Cloud Run, Azure Container Instances...
-```
 
 ## 📚 Utilisation
 
