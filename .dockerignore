@@ -1,0 +1,80 @@
+# ================================
+# DOCKERIGNORE - EXCLUSIONS POUR LE BUILD
+# ================================
+
+# Environnements virtuels Python
+venv/
+env/
+.venv/
+.env/
+
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Données temporaires (seront montées via volumes)
+chroma_data/
+instance/uploaded_files/
+instance/chromadb/
+
+# Fichiers d'environnement
+.env
+.env.*
+
+# Migrations temporaires (Alembic sera exécuté dans le conteneur)
+migrations/__pycache__/

@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # ================================
+  # SERVICE BASE DE DONNÉES MYSQL
+  # ================================
+  mysql:
+    image: mysql:8.0
+    container_name: talanagent_mysql_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pwd
+      MYSQL_DATABASE: talanagent
+      MYSQL_USER: dev_user
+      MYSQL_PASSWORD: dev_pwd
+    ports:
+      - "3306:3306"
+    volumes:
+      # Persistance des données MySQL
+      - mysql_data:/var/lib/mysql
+      # Configuration MySQL pour le développement
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - talanagent_network
+
+  # ================================
+  # SERVICE PHPMYADMIN (Interface MySQL)
+  # ================================
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:5.2
+    container_name: talanagent_phpmyadmin_dev
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: dev_user
+      PMA_PASSWORD: dev_pwd
+      MYSQL_ROOT_PASSWORD: root_pwd
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+    networks:
+      - talanagent_network
+
+  # ================================
+  # SERVICE APPLICATION FLASK
+  # ================================
+  flask-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: talanagent_flask_dev
+    restart: unless-stopped
+    environment:
+      # Configuration Flask
+      FLASK_ENV: development
+      FLASK_DEBUG: 1
+      PORT: 5000
+      
+      # Configuration MySQL
+      MYSQL_HOST: mysql
+      MYSQL_DB: talanagent
+      MYSQL_USER: dev_user
+      MYSQL_PASSWORD: dev_pwd
+      
+      # Configuration ChromaDB
+      CHROMA_DB_PATH: /app/chroma_data
+      CHROMA_COLLECTION_NAME: dev_collection
+      
+      # Variables d'environnement depuis .env.dev
+      SECRET_KEY: ${SECRET_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+    ports:
+      - "5000:5000"
+    volumes:
+      # Code source pour le hot-reload en développement
+      - .:/app
+      # Persistance ChromaDB
+      - ./chroma_data:/app/chroma_data
+      # Persistance des uploads
+      - ./instance:/app/instance
+    depends_on:
+      - mysql
+    networks:
+      - talanagent_network
+    # Commande pour lancer Flask avec migrations automatiques
+    command: >
+      sh -c "
+        echo 'Attente de MySQL...' &&
+        sleep 15 &&
+        echo 'Exécution des migrations Alembic...' &&
+        alembic upgrade head &&
+        echo 'Démarrage de Flask en mode développement...' &&
+        python run.py
+      "
+
+# ================================
+# VOLUMES PERSISTANTS
+# ================================
+volumes:
+  mysql_data:
+    driver: local
+
+# ================================
+# RÉSEAU INTERNE
+# ================================
+networks:
+  talanagent_network:
+    driver: bridge

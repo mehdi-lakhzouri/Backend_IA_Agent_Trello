@@ -112,6 +112,19 @@ class Config(db.Model):
         
         return cls.query.filter(text("JSON_EXTRACT(config_data, '$.boardId') = :board_id")).params(board_id=board_id).first()
 
+    @classmethod
+    def get_config_by_board_and_list(cls, board_id: str, list_id: str):
+        """Récupère la configuration correspondant au couple (board_id, list_id).
+        En cas de doublons, retourne la plus récente (createdAt DESC)."""
+        from sqlalchemy import desc
+        return (
+            cls.query
+            .filter(text("JSON_EXTRACT(config_data, '$.boardId') = :board_id AND JSON_EXTRACT(config_data, '$.listId') = :list_id"))
+            .params(board_id=board_id, list_id=list_id)
+            .order_by(desc(getattr(cls, 'createdAt')))
+            .first()
+        )
+
 
 class Analyse(db.Model):
     __tablename__ = 'analyse'

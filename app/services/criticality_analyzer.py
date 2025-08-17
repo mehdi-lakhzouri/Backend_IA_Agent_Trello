@@ -11,7 +11,7 @@ from app.database.chroma import ChromaDBManager
 
 
 class CriticalityAnalyzer:
-    """Analyse la criticité des cards Trello en utilisant Gemini 1.5 Flash."""
+    """Analyse la criticité des cards Trello en utilisant Gemini 2.5 Flash."""
     
     def __init__(self):
         """Initialise le service avec la configuration Gemini."""

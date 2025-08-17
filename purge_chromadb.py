@@ -1,8 +1,12 @@
 import chromadb
 import os
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement
+load_dotenv()
 
 # Chemin vers le dossier contenant la base ChromaDB
-DB_PATH = './instance/chromadb'
+DB_PATH = os.environ.get('CHROMA_DB_PATH') or os.path.join('.', 'instance', 'chromadb')
 
 def purge_all_collections():
     try:
