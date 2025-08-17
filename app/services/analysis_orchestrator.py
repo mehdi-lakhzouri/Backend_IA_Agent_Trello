@@ -142,13 +142,18 @@ class AnalysisOrchestrator:
                 # IMPORTANT: récupérer la config correspondant à la liste en cours
                 config = None
                 try:
-                    # Si une config exacte (board+list) existe, on l'utilise, sinon fallback board
-                    if hasattr(Config, 'get_config_by_board_and_list'):
-                        config = Config.get_config_by_board_and_list(board_id, list_id)
+                    # Cherche d'abord une config (board+list), sinon fallback board
+                    config = Config.get_config_by_board_and_list(board_id, list_id)
                     if not config:
                         config = Config.get_config_by_board(board_id)
-                except Exception as _:
-                    config = Config.get_config_by_board(board_id)
+                except Exception as e:
+                    logger.error(f"[ORCH] Error retrieving config for board/list: {e}")
+                    # Fallback board-level config as a safe default
+                    try:
+                        config = Config.get_config_by_board(board_id)
+                    except Exception as e2:
+                        logger.error(f"[ORCH] Error retrieving board-level config: {e2}")
+                        config = None
                 if config and config.config_data and config.config_data.get('targetListId'):
                     self.trello_client.move_card(card_id=cid, new_list_id=config.config_data['targetListId'])
                     result['card_moved'] = True

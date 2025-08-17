@@ -17,6 +17,7 @@ if __name__ == '__main__':
     debug = os.environ.get('FLASK_ENV') == 'development'
     
     print(f"Démarrage de Flask sur le port {port} en mode {'debug' if debug else 'production'}")
+    print(f"Starting Flask on port {port} in {'debug' if debug else 'production'} mode")
     print("✅ Base de données initialisée avec Alembic migrations")
     
     app.run(

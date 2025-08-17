@@ -68,15 +68,19 @@ def upload_document():
             os.remove(filepath)
             return jsonify({"error": "Impossible d'extraire le contenu du fichier"}), 400
 
-        # Vérification de doublon avant vectorisation
+        # Vérification de doublon avant vectorisation (basée sur content_hash)
         vectorizer = VectorizerService()
         duplicate_info = vectorizer.check_duplicate_file(original_secure_name, content)
         if duplicate_info.get("exists"):
             # Supprimer le fichier si c'est un doublon
             os.remove(filepath)
             return jsonify({
-                "error": "Fichier déjà existant",
-                "details": duplicate_info
+                "error": "Contenu déjà existant",
+                "details": {
+                    "message": duplicate_info.get("message"),
+                    "existing_filename": duplicate_info.get("existing_filename"),
+                    "document_id": duplicate_info.get("document_id")
+                }
             }), 409  # 409 Conflict
         
         # Vectorisation et stockage

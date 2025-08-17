@@ -281,14 +281,23 @@ def process_all_configurations() -> List[Dict[str, Any]]:
     results = []
 
     try:
-        # Récupérer toutes les configurations
-        configs = Config.query.all()
+        # Récupérer la date de la dernière analyse effectuée
+        last_analyse = Analyse.query.order_by(Analyse.createdAt.desc()).first()
+        
+        if last_analyse:
+            # Filtrer les configurations créées après la dernière analyse
+            configs = Config.query.filter(Config.createdAt > last_analyse.createdAt).all()
+            logger.info(f"Dernière analyse: {last_analyse.reference} ({last_analyse.createdAt})")
+        else:
+            # Aucune analyse précédente, prendre toutes les configurations
+            configs = Config.query.all()
+            logger.info("Aucune analyse précédente trouvée, traitement de toutes les configurations")
 
         if not configs:
-            logger.warning("Aucune configuration trouvée dans la base de données")
+            logger.warning("Aucune nouvelle configuration trouvée depuis la dernière analyse")
             return results
 
-        logger.info(f"{len(configs)} configuration(s) trouvée(s)")
+        logger.info(f"{len(configs)} nouvelle(s) configuration(s) trouvée(s) depuis la dernière analyse")
 
         # Créer UNE SEULE session d'analyse pour toutes les configurations
         logger.info("Création d'une session d'analyse globale...")

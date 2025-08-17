@@ -119,76 +119,70 @@ class VectorizerService:
     
     def check_duplicate_file(self, filename: str, content: Optional[str] = None) -> Dict[str, Any]:
         """
-        Vérifie si un fichier existe déjà dans ChromaDB.
+        Vérifie si un fichier existe déjà dans ChromaDB basé sur le hash du contenu.
+        Cette stratégie évite les collisions de noms et se base uniquement sur le contenu.
         
         Args:
-            filename (str): Nom du fichier à vérifier
-            content (str, optional): Contenu du fichier pour vérification plus précise
+            filename (str): Nom du fichier (utilisé pour les logs)
+            content (str, optional): Contenu du fichier pour vérification par hash
             
         Returns:
             Dict: {
                 "exists": bool,
-                "documents": List[Dict] si trouvé,
+                "document_id": str si trouvé,
                 "message": str
             }
         """
         try:
             import hashlib
+            
+            # Si pas de contenu fourni, impossible de vérifier par hash
+            if not content:
+                return {
+                    "exists": False,
+                    "message": "Impossible de vérifier sans contenu - considéré comme nouveau"
+                }
+            
             collection = self.db_manager.get_collection()
             
-            # Calculer un hash du contenu si disponible
-            content_hash = None
-            if content:
-                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            # Calculer le hash du contenu fourni
+            content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
             
-            # Recherche par nom de fichier dans les métadonnées
+            # Recherche par content_hash dans les métadonnées (plus robuste)
             results = collection.get(
-                where={"filename": filename},
+                where={"content_hash": content_hash},
                 include=['documents', 'metadatas']
             )
             
             if not results['ids']:
                 return {
                     "exists": False,
-                    "documents": [],
-                    "message": f"Aucun fichier trouvé avec le nom '{filename}'"
+                    "message": f"Contenu unique - aucun doublon détecté pour '{filename}'"
                 }
             
-            # Si un contenu est fourni, vérification plus précise avec hash
-            if content:
-                # Calculer le hash du contenu fourni
-                content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+            # Si des documents avec le même hash existent
+            if results['ids'] and len(results['ids']) > 0:
+                # Récupérer les infos du premier document trouvé
+                first_metadata = results.get('metadatas', [{}])[0]
+                document_id = first_metadata.get("document_id")
+                existing_filename = first_metadata.get("filename", "fichier_inconnu")
                 
-                # Vérifier si le hash correspond à un document existant
-                for i, _ in enumerate(results['ids']):
-                    metadatas = results.get('metadatas') or []
-                    if i < len(metadatas):
-                        metadata = metadatas[i]
-                        stored_hash = metadata.get('content_hash')
-                        
-                        if stored_hash and stored_hash == content_hash:
-                            return {
-                                "exists": True,
-                                "document_id": metadata.get("document_id"),
-                                "message": "Le contenu de ce fichier existe déjà"
-                            }
-                
-                # Si le nom existe mais le contenu est différent
                 return {
-                    "exists": False,
-                    "message": "Un fichier de même nom mais de contenu différent existe déjà"
+                    "exists": True,
+                    "document_id": document_id,
+                    "existing_filename": existing_filename,
+                    "message": f"Contenu identique déjà stocké (fichier original: '{existing_filename}')"
                 }
             
-            # Retour simple si pas de vérification de contenu
+            # Cas de sécurité
             return {
-                "exists": True,
-                "message": "Le fichier existe déjà"
+                "exists": False,
+                "message": "Vérification incomplète - considéré comme nouveau"
             }
             
         except Exception as e:
-            current_app.logger.error(f"Erreur lors de la vérification de doublon: {str(e)}")
+            current_app.logger.error(f"Erreur lors de la vérification de doublon par hash: {str(e)}")
             return {
                 "exists": False,
-                "documents": [],
                 "message": f"Erreur lors de la vérification: {str(e)}"
             }
