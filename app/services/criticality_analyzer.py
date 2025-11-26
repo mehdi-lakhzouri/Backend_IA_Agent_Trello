@@ -191,7 +191,7 @@ Now assess this card.
         previous_justification = previous_analysis.get('justification', 'No previous justification')
         
         return f'''
-You are a Senior Product Owner and Risk Assessment Specialist conducting a **DETAILED RE-ANALYSIS** of a previously evaluated Trello card. Your goal is to perform a thorough verification of the criticality level with enhanced scrutiny and provide a clear, concise justification in English.
+You are a Senior Product Owner and Risk Assessment Specialist conducting a **DETAILED RE-ANALYSIS** of a previously evaluated Trello card. Your goal is to perform a thorough verification of the criticality level with enhanced scrutiny and fournir une justification claire et concise en français.
 
 ━━━━━━━━━━━━━━━━━━
  APPLICATION CONTEXT:
@@ -226,16 +226,16 @@ You are a Senior Product Owner and Risk Assessment Specialist conducting a **DET
 - **LOW**: Minor improvements, documentation, UI polish, or low-impact optimizations
 
 ━━━━━━━━━━━━━━━━━━
- DELIVERABLE:
-Provide a **CONCISE, PROFESSIONAL JUSTIFICATION** (3-4 sentences maximum) in English that:
+DELIVERABLE:
+Provide a **CONCISE, PROFESSIONAL JUSTIFICATION** (3-4 sentences maximum) in French that:
 - Clearly states the confirmed or revised criticality level
 - Explains the key factors that drive this assessment
 - References specific aspects of the application context
 - Mentions any changes from the previous analysis (if applicable)
 
- FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
 CRITICALITY LEVEL: [HIGH/MEDIUM/LOW]
-JUSTIFICATION: [3-4 sentences explaining the assessment in clear, professional English]
+JUSTIFICATION: [3-4 sentences explaining the assessment in clear, professional French]
 
 ━━━━━━━━━━━━━━━━━━
 Proceed with the detailed re-analysis now.

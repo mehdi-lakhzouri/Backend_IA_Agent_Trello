@@ -27,6 +27,22 @@ from app.services.config_service import ConfigService
 from app.services.validators import require_json
 trello_bp = Blueprint('trello', __name__)
 
+def format_reanalysis_comment(justification_text):
+    """
+    Formate directement un commentaire de réanalyse avec le préfixe approprié.
+    
+    Args:
+        justification_text (str): Le texte de justification brut
+        
+    Returns:
+        str: Le commentaire formaté avec le préfixe [TALAN AGENT reanalyse 🤖]
+    """
+    if not justification_text:
+        return ""
+    
+    # Retourner directement le texte avec le préfixe de réanalyse
+    return f"[TALAN AGENT reanalyse 🤖] {justification_text.strip()}"
+
 # Note: Les routes de connexion Trello sont maintenant gérées côté frontend
 
 @trello_bp.route('/api/trello/board/<board_id>/list/<list_id>/analyze', methods=['POST'])
@@ -97,6 +113,176 @@ def add_label_to_card(card_id):
         })
     except Exception as e:  # noqa: BLE001
         return error(f"Erreur lors du traitement: {str(e)}", status=500)
+
+
+@trello_bp.route('/api/tickets/<ticket_id>/accept-reanalysis', methods=['POST'])
+def accept_reanalysis(ticket_id):
+    """
+    Accepte une réanalyse et applique les résultats sur la carte Trello.
+    
+    URL: POST /api/tickets/{ticketId}/accept-reanalysis
+    Body JSON attendu:
+    {
+        "ticket_id": "string",
+        "accepted_at": "string (ISO timestamp)"
+    }
+    
+    Réponse JSON:
+    {
+        "status": "success" | "error",
+        "message": "string",
+        "ticket_id": "string",
+        "accepted_at": "string"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        
+        # Validation du payload
+        if not data.get('ticket_id'):
+            return jsonify({
+                "status": "error",
+                "message": "ticket_id est requis"
+            }), 400
+            
+        if not data.get('accepted_at'):
+            return jsonify({
+                "status": "error", 
+                "message": "accepted_at est requis"
+            }), 400
+            
+        payload_ticket_id = data.get('ticket_id')
+        accepted_at = data.get('accepted_at')
+        
+        # Vérifier que le ticket_id du payload correspond à celui de l'URL
+        if payload_ticket_id != ticket_id:
+            return jsonify({
+                "status": "error",
+                "message": "ticket_id dans l'URL et le payload ne correspondent pas"
+            }), 400
+        
+        # Récupérer le ticket depuis la base de données (utiliser ticket_id STRING, pas id_ticket INTEGER)
+        ticket = Tickets.query.filter_by(ticket_id=ticket_id).first()
+        if not ticket:
+            return jsonify({
+                "status": "error",
+                "message": f"Ticket {ticket_id} non trouvé"
+            }), 404
+            
+        # Récupérer la dernière analyse de réanalyse pour ce ticket
+        # Utiliser ticket.id_ticket (INTEGER) pour faire correspondre avec TicketAnalysisHistory.ticket_id
+        logger.info(f"Recherche de réanalyse pour ticket.id_ticket={ticket.id_ticket}, ticket.ticket_id={ticket.ticket_id}")
+        
+        latest_reanalysis = db.session.query(TicketAnalysisHistory)\
+            .join(Analyse, TicketAnalysisHistory.analyse_id == Analyse.analyse_id)\
+            .filter(TicketAnalysisHistory.ticket_id == ticket.id_ticket)\
+            .filter(Analyse.reanalyse == True)\
+            .order_by(TicketAnalysisHistory.analyzed_at.desc())\
+            .first()
+            
+        # Debugging: afficher toutes les entrées d'analyse pour ce ticket
+        all_analyses = db.session.query(TicketAnalysisHistory)\
+            .filter(TicketAnalysisHistory.ticket_id == ticket.id_ticket)\
+            .all()
+        logger.info(f"Trouvé {len(all_analyses)} analyses pour ce ticket")
+        
+        if not latest_reanalysis:
+            # Essayer de chercher par ticket_id string au cas où
+            alternative_search = db.session.query(TicketAnalysisHistory)\
+                .join(Analyse, TicketAnalysisHistory.analyse_id == Analyse.analyse_id)\
+                .filter(TicketAnalysisHistory.ticket_id == ticket.ticket_id)\
+                .filter(Analyse.reanalyse == True)\
+                .order_by(TicketAnalysisHistory.analyzed_at.desc())\
+                .first()
+            
+            if alternative_search:
+                latest_reanalysis = alternative_search
+                logger.info(f"Réanalyse trouvée avec recherche alternative par ticket_id string")
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Aucune réanalyse trouvée pour le ticket {ticket_id} (id_ticket={ticket.id_ticket})"
+                }), 404
+            
+        # Récupérer les informations de configuration pour accéder à l'API Trello
+        # Récupérer le board_id depuis les métadonnées du ticket
+        ticket_metadata = ticket.ticket_metadata or {}
+        board_id = ticket_metadata.get('board_id')
+        if not board_id:
+            return jsonify({
+                "status": "error",
+                "message": "Board ID non trouvé dans les métadonnées du ticket"
+            }), 404
+            
+        config = Config.get_config_by_board(board_id)
+        if not config:
+            return jsonify({
+                "status": "error",
+                "message": f"Configuration du board {board_id} non trouvée"
+            }), 404
+            
+        # Récupérer le token Trello depuis la configuration
+        trello_token = config.config_data.get('token')
+        if not trello_token:
+            return jsonify({
+                "status": "error",
+                "message": "Token Trello non trouvé dans la configuration"
+            }), 500
+            
+        # Appliquer le label de criticité sur la carte Trello
+        try:
+            criticality_level = latest_reanalysis.criticality_level
+            if criticality_level:
+                apply_criticality_label_with_creation(
+                    card_id=ticket_id,
+                    board_id=board_id,
+                    token=trello_token,
+                    criticality_level=criticality_level
+                )
+                logger.info(f"Label de criticité '{criticality_level}' appliqué sur la carte {ticket_id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'application du label: {str(e)}")
+            # On continue même si le label échoue
+            
+        # Ajouter le commentaire de réanalyse avec le préfixe
+        try:
+            if latest_reanalysis.analyse_justification:
+                justification = latest_reanalysis.analyse_justification.get('justification', '')
+                if justification:
+                    # Utiliser la fonction de formatage pour créer le commentaire
+                    prefixed_comment = format_reanalysis_comment(justification)
+                    
+                    # Passer custom_prefix="" pour éviter le double préfixage
+                    add_comment_to_card(
+                        card_id=ticket_id,
+                        comment=prefixed_comment,
+                        token=trello_token,
+                        custom_prefix=""
+                    )
+                    logger.info(f"Commentaire de réanalyse ajouté sur la carte {ticket_id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'ajout du commentaire: {str(e)}")
+            # On continue même si le commentaire échoue
+            
+        # Marquer la réanalyse comme acceptée (optionnel: ajouter un champ accepted_at)
+        # Pour l'instant, on log juste l'acceptation
+        logger.info(f"Réanalyse acceptée pour le ticket {ticket_id} à {accepted_at}")
+        
+        # Retourner la réponse attendue par le frontend
+        return jsonify({
+            "status": "success",
+            "message": "Reanalysis accepted",
+            "ticket_id": ticket_id,
+            "accepted_at": accepted_at
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de l'acceptation de la réanalyse: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "status": "error",
+            "message": f"Erreur serveur: {str(e)}"
+        }), 500
 
 
 @trello_bp.route('/api/trello/card/<card_id>/add-comment', methods=['POST'])

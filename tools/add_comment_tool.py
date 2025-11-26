@@ -4,7 +4,7 @@ import logging
 from typing import Dict
 
 
-def add_comment_to_card(card_id: str, token: str, comment: str) -> Dict:
+def add_comment_to_card(card_id: str, token: str, comment: str, custom_prefix: str = None) -> Dict:
     """
     Add a comment to a Trello card.
 
@@ -12,6 +12,7 @@ def add_comment_to_card(card_id: str, token: str, comment: str) -> Dict:
         card_id (str): The ID of the Trello card.
         token (str): The Trello API token.
         comment (str): The comment text to add to the card.
+        custom_prefix (str, optional): Custom prefix to use. If None, uses default TALAN AGENT prefix.
 
     Returns:
         Dict: Response from the Trello API.
@@ -30,10 +31,18 @@ def add_comment_to_card(card_id: str, token: str, comment: str) -> Dict:
         'key': api_key,
         'token': token
     }
-    # Préfixe personnalisé
-    prefix = '[TALAN AGENT 🤖] '
+    
+    # Utiliser le préfixe personnalisé ou le préfixe par défaut
+    if custom_prefix is not None:
+        # Si un préfixe personnalisé est fourni, l'utiliser tel quel
+        final_comment = comment if custom_prefix == "" else f'{custom_prefix}{comment}'
+    else:
+        # Préfixe par défaut
+        prefix = '[TALAN AGENT 🤖] '
+        final_comment = f'{prefix}{comment}'
+    
     data = {
-        'text': f'{prefix}{comment}'
+        'text': final_comment
     }
 
     # Envoyer la requête POST avec params et data (conforme à la doc Trello)
